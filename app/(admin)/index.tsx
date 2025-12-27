@@ -3,7 +3,6 @@ import { useAuth } from '@/src/context/AuthContext';
 import React, { useEffect, useState } from 'react';
 import {
     ActivityIndicator,
-    FlatList,
     RefreshControl,
     ScrollView,
     StyleSheet,
@@ -11,79 +10,112 @@ import {
     View,
 } from 'react-native';
 
-type Post = {
-  id: string;
-  text: string;
-  reactions: number;
-  rating: number;
-  created_at: string;
-  user_id: string;
-  users?: {
-    name: string;
-  };
-};
-
 type Stats = {
   totalUsers: number;
   totalPosts: number;
   totalReactions: number;
+  averageRating: number;
   activeToday: number;
+  postsThisWeek: number;
 };
 
 export default function AdminDashboard() {
   const { profile } = useAuth();
-  const [posts, setPosts] = useState<Post[]>([]);
   const [stats, setStats] = useState<Stats>({
     totalUsers: 0,
     totalPosts: 0,
     totalReactions: 0,
+    averageRating: 0,
     activeToday: 0,
+    postsThisWeek: 0,
   });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     fetchDashboardData();
+    
+    // Real-time subscription for live updates
+    const subscription = supabase
+      .channel('dashboard-updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => {
+        fetchDashboardData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
+        fetchDashboardData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'post_reactions' }, () => {
+        fetchDashboardData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'post_ratings' }, () => {
+        fetchDashboardData();
+      })
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   const fetchDashboardData = async () => {
-    // Fetch all posts with user info
-    const { data: postsData, error: postsError } = await supabase
-      .from('posts')
-      .select('*, users(name)')
-      .order('created_at', { ascending: false })
-      .limit(20);
+    try {
+      // Fetch user count
+      const { count: userCount } = await supabase
+        .from('users')
+        .select('*', { count: 'exact', head: true });
 
-    if (postsError) {
-      console.error('Error fetching posts:', postsError);
-    } else {
-      setPosts(postsData || []);
+      // Fetch post count
+      const { count: postCount } = await supabase
+        .from('posts')
+        .select('*', { count: 'exact', head: true });
+
+      // Fetch total reactions count
+      const { count: reactionsCount } = await supabase
+        .from('post_reactions')
+        .select('*', { count: 'exact', head: true });
+
+      // Fetch all ratings to calculate average
+      const { data: ratingsData } = await supabase
+        .from('post_ratings')
+        .select('rating');
+
+      const avgRating = ratingsData && ratingsData.length > 0
+        ? ratingsData.reduce((sum, r) => sum + r.rating, 0) / ratingsData.length
+        : 0;
+
+      // Posts from last 7 days
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const { count: weekPostCount } = await supabase
+        .from('posts')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', sevenDaysAgo.toISOString());
+
+      // Active users today (posted today)
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const { data: todayPosts } = await supabase
+        .from('posts')
+        .select('user_id')
+        .gte('created_at', todayStart.toISOString());
+
+      const uniqueActiveUsers = todayPosts 
+        ? new Set(todayPosts.map(p => p.user_id)).size 
+        : 0;
+
+      setStats({
+        totalUsers: userCount || 0,
+        totalPosts: postCount || 0,
+        totalReactions: reactionsCount || 0,
+        averageRating: avgRating,
+        activeToday: uniqueActiveUsers,
+        postsThisWeek: weekPostCount || 0,
+      });
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setLoading(false);
     }
-
-    // Fetch user count
-    const { count: userCount } = await supabase
-      .from('users')
-      .select('*', { count: 'exact', head: true });
-
-    // Fetch post count
-    const { count: postCount } = await supabase
-      .from('posts')
-      .select('*', { count: 'exact', head: true });
-
-    // Calculate total reactions
-    const totalReactions = (postsData || []).reduce(
-      (sum, post) => sum + (post.reactions || 0),
-      0
-    );
-
-    setStats({
-      totalUsers: userCount || 0,
-      totalPosts: postCount || 0,
-      totalReactions,
-      activeToday: 0,
-    });
-
-    setLoading(false);
   };
 
   const onRefresh = async () => {
@@ -92,37 +124,6 @@ export default function AdminDashboard() {
     setRefreshing(false);
   };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
-
-  const renderPost = ({ item }: { item: Post }) => (
-    <View style={styles.postCard}>
-      <View style={styles.postHeader}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
-            {(item.users?.name || 'U')[0].toUpperCase()}
-          </Text>
-        </View>
-        <View style={styles.postHeaderInfo}>
-          <Text style={styles.authorName}>{item.users?.name || 'Unknown'}</Text>
-          <Text style={styles.postDate}>{formatDate(item.created_at)}</Text>
-        </View>
-      </View>
-      <Text style={styles.postText} numberOfLines={3}>
-        {item.text}
-      </Text>
-      <View style={styles.postStats}>
-        <Text style={styles.postStatText}>❤️ {item.reactions}</Text>
-        <Text style={styles.postStatText}>⭐ {item.rating}</Text>
-      </View>
-    </View>
-  );
 
   if (loading) {
     return (
@@ -135,47 +136,80 @@ export default function AdminDashboard() {
   return (
     <ScrollView
       style={styles.container}
+      showsVerticalScrollIndicator={false}
       refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#C4A574" />
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#5E5CE6" />
       }>
       <View style={styles.header}>
         <Text style={styles.welcomeText}>Admin Dashboard</Text>
         <Text style={styles.nameText}>Welcome, {profile?.name}</Text>
+        <Text style={styles.subtitleText}>Platform analytics and insights</Text>
       </View>
 
-      <View style={styles.statsGrid}>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{stats.totalUsers}</Text>
-          <Text style={styles.statLabel}>Total Users</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{stats.totalPosts}</Text>
-          <Text style={styles.statLabel}>Total Posts</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{stats.totalReactions}</Text>
-          <Text style={styles.statLabel}>Total Reactions</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{stats.activeToday}</Text>
-          <Text style={styles.statLabel}>Active Today</Text>
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>📊 Platform Statistics</Text>
+        <View style={styles.statsGrid}>
+          <View style={[styles.statCard, styles.primaryCard]}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>👥</Text>
+            </View>
+            <Text style={styles.statNumber}>{stats.totalUsers}</Text>
+            <Text style={styles.statLabel}>Total Users</Text>
+          </View>
+          <View style={[styles.statCard, styles.secondaryCard]}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>📝</Text>
+            </View>
+            <Text style={styles.statNumber}>{stats.totalPosts}</Text>
+            <Text style={styles.statLabel}>Total Posts</Text>
+          </View>
         </View>
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>All Recent Posts</Text>
-        {posts.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>No posts yet</Text>
+        <Text style={styles.sectionTitle}>🔥 Engagement Metrics</Text>
+        <View style={styles.statsGrid}>
+          <View style={styles.statCard}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>❤️</Text>
+            </View>
+            <Text style={styles.statNumber}>{stats.totalReactions}</Text>
+            <Text style={styles.statLabel}>Total Reactions</Text>
           </View>
-        ) : (
-          <FlatList
-            data={posts}
-            renderItem={renderPost}
-            keyExtractor={(item) => item.id}
-            scrollEnabled={false}
-          />
-        )}
+          <View style={styles.statCard}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>⭐</Text>
+            </View>
+            <Text style={styles.statNumber}>
+              {stats.averageRating > 0 ? stats.averageRating.toFixed(1) : '0.0'}
+            </Text>
+            <Text style={styles.statLabel}>Avg Rating</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>📈 Activity Overview</Text>
+        <View style={styles.statsGrid}>
+          <View style={[styles.statCard, styles.successCard]}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>✨</Text>
+            </View>
+            <Text style={styles.statNumber}>{stats.activeToday}</Text>
+            <Text style={styles.statLabel}>Active Today</Text>
+          </View>
+          <View style={[styles.statCard, styles.infoCard]}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>📅</Text>
+            </View>
+            <Text style={styles.statNumber}>{stats.postsThisWeek}</Text>
+            <Text style={styles.statLabel}>Posts This Week</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.footer}>
+        <Text style={styles.footerText}>💡 Real-time updates enabled</Text>
       </View>
     </ScrollView>
   );
@@ -195,115 +229,103 @@ const styles = StyleSheet.create({
   header: {
     padding: 24,
     paddingTop: 16,
+    paddingBottom: 16,
   },
   welcomeText: {
     fontSize: 14,
-    color: '#C4A574',
+    color: '#5E5CE6',
     textTransform: 'uppercase',
     letterSpacing: 2,
     fontWeight: '600',
   },
   nameText: {
-    fontSize: 28,
+    fontSize: 32,
     fontWeight: '700',
-    color: '#E8D5B7',
+    color: '#FFFFFF',
     marginTop: 4,
+  },
+  subtitleText: {
+    fontSize: 15,
+    color: '#8E8E93',
+    marginTop: 6,
+  },
+  section: {
+    paddingHorizontal: 16,
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    marginBottom: 16,
+    paddingLeft: 4,
   },
   statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    paddingHorizontal: 16,
     gap: 12,
   },
   statCard: {
     backgroundColor: '#1C1C1E',
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 20,
-    width: '47%',
+    width: '47.5%',
     borderWidth: 1,
     borderColor: '#2C2C2E',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  primaryCard: {
+    borderColor: 'rgba(94, 92, 230, 0.3)',
+    backgroundColor: 'rgba(94, 92, 230, 0.05)',
+  },
+  secondaryCard: {
+    borderColor: 'rgba(196, 165, 116, 0.3)',
+    backgroundColor: 'rgba(196, 165, 116, 0.05)',
+  },
+  successCard: {
+    borderColor: 'rgba(48, 209, 88, 0.3)',
+    backgroundColor: 'rgba(48, 209, 88, 0.05)',
+  },
+  infoCard: {
+    borderColor: 'rgba(100, 210, 255, 0.3)',
+    backgroundColor: 'rgba(100, 210, 255, 0.05)',
+  },
+  statIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#2C2C2E',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  statIconText: {
+    fontSize: 24,
   },
   statNumber: {
     fontSize: 32,
     fontWeight: '700',
-    color: '#C4A574',
+    color: '#FFFFFF',
+    marginBottom: 4,
   },
   statLabel: {
-    fontSize: 14,
-    color: '#8E8E93',
-    marginTop: 4,
-  },
-  section: {
-    padding: 24,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#FFFFFF',
-    marginBottom: 16,
-  },
-  postCard: {
-    backgroundColor: '#1C1C1E',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
-  },
-  postHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#C4A574',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  avatarText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#0D0D0D',
-  },
-  postHeaderInfo: {
-    flex: 1,
-  },
-  authorName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  postDate: {
-    fontSize: 12,
-    color: '#8E8E93',
-    marginTop: 2,
-  },
-  postText: {
-    fontSize: 15,
-    color: '#FFFFFF',
-    lineHeight: 22,
-  },
-  postStats: {
-    flexDirection: 'row',
-    marginTop: 12,
-    gap: 16,
-  },
-  postStatText: {
     fontSize: 13,
     color: '#8E8E93',
+    textAlign: 'center',
   },
-  emptyState: {
+  footer: {
     alignItems: 'center',
-    padding: 40,
-    backgroundColor: '#1C1C1E',
-    borderRadius: 16,
+    paddingVertical: 32,
+    paddingBottom: 48,
   },
-  emptyText: {
-    fontSize: 16,
-    color: '#8E8E93',
+  footerText: {
+    fontSize: 13,
+    color: '#6E6E73',
+    fontStyle: 'italic',
   },
 });
