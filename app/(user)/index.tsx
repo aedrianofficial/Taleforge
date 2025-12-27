@@ -1,10 +1,7 @@
-import { supabase } from '@/src/config/supabase';
 import { useAuth } from '@/src/context/AuthContext';
-import React, { useEffect, useState } from 'react';
+import { useRouter } from 'expo-router';
+import React from 'react';
 import {
-    ActivityIndicator,
-    FlatList,
-    RefreshControl,
     ScrollView,
     StyleSheet,
     Text,
@@ -12,48 +9,9 @@ import {
     View,
 } from 'react-native';
 
-type Post = {
-  id: string;
-  text: string;
-  reactions: number;
-  rating: number;
-  created_at: string;
-  user_id: string;
-};
-
 export default function UserHome() {
   const { profile } = useAuth();
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-
-  useEffect(() => {
-    fetchUserPosts();
-  }, [profile?.id]);
-
-  const fetchUserPosts = async () => {
-    if (!profile?.id) return;
-
-    const { data, error } = await supabase
-      .from('posts')
-      .select('*')
-      .eq('user_id', profile.id)
-      .order('created_at', { ascending: false })
-      .limit(10);
-
-    if (error) {
-      console.error('Error fetching posts:', error);
-    } else {
-      setPosts(data || []);
-    }
-    setLoading(false);
-  };
-
-  const onRefresh = async () => {
-    setRefreshing(true);
-    await fetchUserPosts();
-    setRefreshing(false);
-  };
+  const router = useRouter();
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -62,75 +20,98 @@ export default function UserHome() {
     return 'Good evening';
   };
 
-  const renderPost = ({ item }: { item: Post }) => (
-    <View style={styles.postCard}>
-      <Text style={styles.postText} numberOfLines={3}>
-        {item.text}
-      </Text>
-      <View style={styles.postMeta}>
-        <View style={styles.statBadge}>
-          <Text style={styles.statText}>❤️ {item.reactions}</Text>
-        </View>
-        <View style={styles.statBadge}>
-          <Text style={styles.statText}>⭐ {item.rating}</Text>
-        </View>
-      </View>
-    </View>
-  );
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#C4A574" />
-      </View>
-    );
-  }
-
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#C4A574" />
-      }>
+    <ScrollView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.greeting}>{getGreeting()},</Text>
         <Text style={styles.userName}>{profile?.name || 'User'}</Text>
       </View>
 
-      <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{posts.length}</Text>
-          <Text style={styles.statLabel}>Your Posts</Text>
+      {/* Welcome Hero Section */}
+      <View style={styles.heroSection}>
+        <View style={styles.heroIconContainer}>
+          <Text style={styles.heroIcon}>📖</Text>
         </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>
-            {posts.reduce((sum, post) => sum + post.reactions, 0)}
-          </Text>
-          <Text style={styles.statLabel}>Total Reactions</Text>
-        </View>
+        <Text style={styles.heroTitle}>Welcome to TaleForge</Text>
+        <Text style={styles.heroSubtitle}>
+          Your creative space for sharing stories, ideas, and connecting with fellow creators.
+        </Text>
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Your Recent Posts</Text>
-        {posts.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>📝</Text>
-            <Text style={styles.emptyText}>No posts yet</Text>
-            <Text style={styles.emptySubtext}>Start sharing your stories!</Text>
+      {/* Feature Cards */}
+      <View style={styles.featuresSection}>
+        <Text style={styles.sectionTitle}>What You Can Do</Text>
+        
+        <View style={styles.featureCard}>
+          <View style={styles.featureIconWrapper}>
+            <Text style={styles.featureIcon}>✍️</Text>
           </View>
-        ) : (
-          <FlatList
-            data={posts}
-            renderItem={renderPost}
-            keyExtractor={(item) => item.id}
-            scrollEnabled={false}
-          />
-        )}
+          <View style={styles.featureContent}>
+            <Text style={styles.featureTitle}>Share Your Thoughts</Text>
+            <Text style={styles.featureDescription}>
+              Post updates, share your creative work, and express yourself through text-based posts on the Board.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.featureCard}>
+          <View style={styles.featureIconWrapper}>
+            <Text style={styles.featureIcon}>💬</Text>
+          </View>
+          <View style={styles.featureContent}>
+            <Text style={styles.featureTitle}>Join Discussions</Text>
+            <Text style={styles.featureDescription}>
+              Engage with posts from other users and admins. React to content you love and be part of the community.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.featureCard}>
+          <View style={styles.featureIconWrapper}>
+            <Text style={styles.featureIcon}>🌟</Text>
+          </View>
+          <View style={styles.featureContent}>
+            <Text style={styles.featureTitle}>Real-Time Updates</Text>
+            <Text style={styles.featureDescription}>
+              See new posts appear instantly without refreshing. Stay connected with the latest content as it happens.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.featureCard}>
+          <View style={styles.featureIconWrapper}>
+            <Text style={styles.featureIcon}>👤</Text>
+          </View>
+          <View style={styles.featureContent}>
+            <Text style={styles.featureTitle}>Your Profile</Text>
+            <Text style={styles.featureDescription}>
+              Manage your account settings and view your posting history all in one place.
+            </Text>
+          </View>
+        </View>
       </View>
 
-      <TouchableOpacity style={styles.createButton}>
-        <Text style={styles.createButtonText}>Create New Post</Text>
-      </TouchableOpacity>
+      {/* Call to Action */}
+      <View style={styles.ctaSection}>
+        <Text style={styles.ctaTitle}>Ready to start?</Text>
+        <Text style={styles.ctaDescription}>
+          Head over to the Board to create your first post and see what others are sharing!
+        </Text>
+        <TouchableOpacity 
+          style={styles.ctaButton}
+          onPress={() => router.push('/(user)/board')}>
+          <Text style={styles.ctaButtonText}>Go to Board</Text>
+          <Text style={styles.ctaButtonIcon}>→</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Footer Info */}
+      <View style={styles.footerSection}>
+        <View style={styles.footerDivider} />
+        <Text style={styles.footerText}>
+          Posts are visible to all users. Be kind and respectful in your interactions.
+        </Text>
+      </View>
     </ScrollView>
   );
 }
@@ -138,12 +119,6 @@ export default function UserHome() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0D0D0D',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
     backgroundColor: '#0D0D0D',
   },
   header: {
@@ -160,100 +135,146 @@ const styles = StyleSheet.create({
     color: '#E8D5B7',
     marginTop: 4,
   },
-  statsContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  statCard: {
-    flex: 1,
+  heroSection: {
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+    marginHorizontal: 16,
     backgroundColor: '#1C1C1E',
-    borderRadius: 16,
-    padding: 20,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: '#2C2C2E',
   },
-  statNumber: {
-    fontSize: 28,
+  heroIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(196, 165, 116, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  heroIcon: {
+    fontSize: 40,
+  },
+  heroTitle: {
+    fontSize: 26,
     fontWeight: '700',
-    color: '#C4A574',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    marginBottom: 12,
   },
-  statLabel: {
-    fontSize: 14,
+  heroSubtitle: {
+    fontSize: 16,
     color: '#8E8E93',
-    marginTop: 4,
+    textAlign: 'center',
+    lineHeight: 24,
+    paddingHorizontal: 8,
   },
-  section: {
+  featuresSection: {
     padding: 24,
+    paddingTop: 32,
   },
   sectionTitle: {
     fontSize: 20,
     fontWeight: '600',
     color: '#FFFFFF',
-    marginBottom: 16,
+    marginBottom: 20,
   },
-  postCard: {
+  featureCard: {
+    flexDirection: 'row',
     backgroundColor: '#1C1C1E',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: '#2C2C2E',
   },
-  postText: {
-    fontSize: 16,
-    color: '#FFFFFF',
-    lineHeight: 24,
-  },
-  postMeta: {
-    flexDirection: 'row',
-    marginTop: 12,
-    gap: 12,
-  },
-  statBadge: {
-    backgroundColor: '#2C2C2E',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  statText: {
-    fontSize: 13,
-    color: '#8E8E93',
-  },
-  emptyState: {
+  featureIconWrapper: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: 'rgba(196, 165, 116, 0.1)',
+    justifyContent: 'center',
     alignItems: 'center',
-    padding: 40,
-    backgroundColor: '#1C1C1E',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
+    marginRight: 14,
   },
-  emptyIcon: {
-    fontSize: 48,
-    marginBottom: 16,
+  featureIcon: {
+    fontSize: 24,
   },
-  emptyText: {
-    fontSize: 18,
+  featureContent: {
+    flex: 1,
+  },
+  featureTitle: {
+    fontSize: 17,
     fontWeight: '600',
     color: '#FFFFFF',
+    marginBottom: 4,
   },
-  emptySubtext: {
+  featureDescription: {
     fontSize: 14,
     color: '#8E8E93',
-    marginTop: 4,
+    lineHeight: 20,
   },
-  createButton: {
-    backgroundColor: '#C4A574',
-    marginHorizontal: 24,
-    marginBottom: 24,
-    borderRadius: 12,
-    padding: 16,
+  ctaSection: {
+    marginHorizontal: 16,
+    padding: 24,
+    backgroundColor: 'rgba(196, 165, 116, 0.08)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 165, 116, 0.2)',
     alignItems: 'center',
   },
-  createButtonText: {
+  ctaTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#E8D5B7',
+    marginBottom: 8,
+  },
+  ctaDescription: {
+    fontSize: 15,
+    color: '#8E8E93',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 20,
+  },
+  ctaButton: {
+    flexDirection: 'row',
+    backgroundColor: '#C4A574',
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  ctaButtonText: {
     color: '#0D0D0D',
     fontSize: 17,
     fontWeight: '600',
+    marginRight: 8,
+  },
+  ctaButtonIcon: {
+    color: '#0D0D0D',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  footerSection: {
+    padding: 24,
+    paddingTop: 32,
+    paddingBottom: 40,
+    alignItems: 'center',
+  },
+  footerDivider: {
+    width: 60,
+    height: 3,
+    backgroundColor: '#2C2C2E',
+    borderRadius: 2,
+    marginBottom: 16,
+  },
+  footerText: {
+    fontSize: 13,
+    color: '#6E6E73',
+    textAlign: 'center',
+    lineHeight: 18,
+    paddingHorizontal: 20,
   },
 });
-
