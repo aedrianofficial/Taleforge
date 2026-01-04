@@ -159,21 +159,7 @@ export default function AdminPanelScreen() {
         }
         ListHeaderComponent={
           <View style={styles.headerSection}>
-            <Text style={styles.headerTitle}>Admin Panel</Text>
-
-            <View style={styles.adminActions}>
-              <TouchableOpacity
-                style={styles.adminActionButton}
-                onPress={() => {
-                  // Navigate to story management
-                  router.push('/story-management');
-                }}
-              >
-                <Text style={styles.adminActionButtonText}>📚 Manage Stories</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.sectionTitle}>User Management</Text>
+            <Text style={styles.headerTitle}>User Management</Text>
             <View style={styles.statsRow}>
               <View style={styles.miniStat}>
                 <Text style={styles.miniStatNumber}>{users.length}</Text>

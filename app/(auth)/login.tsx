@@ -1,5 +1,5 @@
 import { useAuth } from '@/src/context/AuthContext';
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
     ActivityIndicator,
@@ -21,6 +21,7 @@ export default function LoginScreen() {
   const [error, setError] = useState('');
 
   const { signIn, signInAnonymous } = useAuth();
+  const router = useRouter();
 
   const handleEmailLogin = async () => {
     if (!email || !password) {
@@ -121,6 +122,14 @@ export default function LoginScreen() {
               onChangeText={setPassword}
               secureTextEntry
             />
+
+            <View style={styles.forgotPasswordContainer}>
+              <Link href="/(auth)/forgot-password" asChild>
+                <TouchableOpacity>
+                  <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+                </TouchableOpacity>
+              </Link>
+            </View>
 
             <TouchableOpacity
               style={styles.primaryButton}
@@ -227,6 +236,15 @@ const styles = StyleSheet.create({
   guestButtonText: {
     color: '#8E8E93',
     fontSize: 15,
+  },
+  forgotPasswordContainer: {
+    alignSelf: 'flex-end',
+    marginBottom: 16,
+  },
+  forgotPasswordText: {
+    color: '#C4A574',
+    fontSize: 14,
+    fontWeight: '500',
   },
 });
 

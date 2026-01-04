@@ -1,6 +1,6 @@
 import { supabase } from '@/src/config/supabase';
-import { Session, User } from '@supabase/supabase-js';
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import { AuthChangeEvent, Session, User } from '@supabase/supabase-js';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 
 export type UserProfile = {
   id: string;
@@ -25,6 +25,7 @@ type AuthContextType = {
   signOut: () => Promise<void>;
   updateProfile: (updates: Partial<UserProfile>) => Promise<{ error: Error | null }>;
   updatePassword: (newPassword: string) => Promise<{ error: Error | null }>;
+  resetPassword: (email: string) => Promise<{ error: Error | null }>;
   refreshProfile: () => Promise<void>;
 };
 
@@ -35,32 +36,78 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  
+  // Flag to prevent re-fetching profile during password update
+  const isUpdatingPasswordRef = useRef(false);
+  // Track if initial load is complete
+  const initialLoadCompleteRef = useRef(false);
+  // Track if profile exists (to avoid stale closure)
+  const hasProfileRef = useRef(false);
 
   useEffect(() => {
+    let isMounted = true;
+    
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!isMounted) return;
+      
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
-        fetchOrCreateProfile(session.user);
+        fetchOrCreateProfile(session.user).then(() => {
+          initialLoadCompleteRef.current = true;
+        });
       } else {
         setLoading(false);
+        initialLoadCompleteRef.current = true;
       }
     });
 
     // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event: AuthChangeEvent, session) => {
+      if (!isMounted) return;
+      
+      console.log('Auth event:', event);
+      
+      // Always update session and user
       setSession(session);
       setUser(session?.user ?? null);
+      
+      // Handle different events appropriately
+      if (event === 'SIGNED_OUT') {
+        setProfile(null);
+        hasProfileRef.current = false;
+        setLoading(false);
+        isUpdatingPasswordRef.current = false;
+        return;
+      }
+      
+      // Skip profile re-fetch for USER_UPDATED if we're updating password
+      // (profile data doesn't change during password update)
+      if (event === 'USER_UPDATED' && isUpdatingPasswordRef.current) {
+        console.log('Skipping profile fetch during password update');
+        return;
+      }
+      
+      // Skip redundant fetches after initial load for TOKEN_REFRESHED
+      if (event === 'TOKEN_REFRESHED' && initialLoadCompleteRef.current && hasProfileRef.current) {
+        console.log('Skipping profile fetch for token refresh');
+        return;
+      }
+      
       if (session?.user) {
         await fetchOrCreateProfile(session.user);
       } else {
         setProfile(null);
+        hasProfileRef.current = false;
         setLoading(false);
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const fetchOrCreateProfile = async (authUser: User) => {
@@ -74,6 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (existingProfile) {
         setProfile(existingProfile);
+        hasProfileRef.current = true;
         setLoading(false);
         return;
       }
@@ -99,6 +147,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error('Error creating profile:', createError);
       } else {
         setProfile(createdProfile);
+        hasProfileRef.current = true;
       }
     } catch (error) {
       console.error('Error in fetchOrCreateProfile:', error);
@@ -149,69 +198,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: new Error('Password must be at least 6 characters') };
     }
 
-    return new Promise((resolve) => {
-      let hasResolved = false;
-      let timeoutId: ReturnType<typeof setTimeout>;
+    // Set flag to prevent auth listener from re-fetching profile
+    isUpdatingPasswordRef.current = true;
 
-      // Set up timeout - if no response in 12 seconds, assume success
-      // (Supabase often succeeds but doesn't return properly in React Native)
-      timeoutId = setTimeout(() => {
-        if (!hasResolved) {
-          hasResolved = true;
-          console.log('Password update timed out - assuming success');
-          resolve({ error: null });
-        }
-      }, 12000);
+    try {
+      // Quick session check - password reset should have established session
+      const { data: { session } } = await supabase.auth.getSession();
 
-      // Check session and make the update call
-      const doUpdate = async () => {
-        try {
-          // Check if user is authenticated
-          const { data: { session: currentSession } } = await supabase.auth.getSession();
-          console.log('Current session:', currentSession ? 'exists' : 'null');
-          
-          if (!currentSession) {
-            clearTimeout(timeoutId);
-            if (!hasResolved) {
-              hasResolved = true;
-              console.log('No active session found');
-              resolve({ error: new Error('You must be logged in to change your password') });
-            }
-            return;
-          }
+      if (!session) {
+        isUpdatingPasswordRef.current = false;
+        return { error: new Error('Session not found. Please restart the password reset process.') };
+      }
 
-          console.log('Updating password via Supabase Auth...');
-          
-          const { data, error } = await supabase.auth.updateUser({
-            password: newPassword,
-          });
+      // Update password with timeout protection
+      const updatePromise = supabase.auth.updateUser({
+        password: newPassword,
+      });
 
-          clearTimeout(timeoutId);
-          
-          if (!hasResolved) {
-            hasResolved = true;
-            
-            if (error) {
-              console.error('Supabase auth update error:', error);
-              resolve({ error: error as Error });
-            } else {
-              console.log('Password updated successfully!');
-              resolve({ error: null });
-            }
-          }
-        } catch (error: any) {
-          clearTimeout(timeoutId);
-          
-          if (!hasResolved) {
-            hasResolved = true;
-            console.error('Unexpected error in updatePassword:', error);
-            resolve({ error: error as Error });
-          }
-        }
-      };
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Password update request timed out')), 8000)
+      );
 
-      doUpdate();
-    });
+      const { data, error } = await Promise.race([updatePromise, timeoutPromise]) as any;
+
+      if (error) {
+        isUpdatingPasswordRef.current = false;
+        return { error: error as Error };
+      }
+
+      // Clear the flag
+      isUpdatingPasswordRef.current = false;
+
+      return { error: null };
+    } catch (error: any) {
+      console.error('Unexpected error in updatePassword:', error);
+      isUpdatingPasswordRef.current = false;
+      return { error: error as Error };
+    }
   };
 
   const signUp = async (email: string, password: string, name: string) => {
@@ -221,7 +244,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         password,
         options: {
           data: { name },
-          emailRedirectTo: 'https://aedrianofficial.github.io/taleforge-confim/',
+          emailRedirectTo: 'https://aedrianofficial.github.io/taleforge-confirm/',
         },
       });
       
@@ -260,9 +283,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const resetPassword = async (email: string): Promise<{ error: Error | null }> => {
+    try {
+      // For Expo Go development, use a web redirect that can handle the deep link
+      // This web page will redirect to the app using window.location.href
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: 'https://aedrianofficial.github.io/taleforge-password-reset/',
+      });
+      return { error };
+    } catch (error) {
+      return { error: error as Error };
+    }
+  };
+
   const signOut = async () => {
-    await supabase.auth.signOut();
-    setProfile(null);
+    console.log('Signing out...');
+    // Clear any pending flags
+    isUpdatingPasswordRef.current = false;
+    hasProfileRef.current = false;
+
+    try {
+      // Clear local state first to ensure immediate UI response
+      setProfile(null);
+      setUser(null);
+      setSession(null);
+
+      // Then sign out from Supabase
+      await supabase.auth.signOut();
+      console.log('Sign out complete');
+    } catch (error) {
+      console.error('Error during sign out:', error);
+      // Still clear local state even if Supabase call fails
+      setProfile(null);
+      setUser(null);
+      setSession(null);
+    }
   };
 
   return (
@@ -278,6 +333,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signOut,
         updateProfile,
         updatePassword,
+        resetPassword,
         refreshProfile,
       }}>
       {children}

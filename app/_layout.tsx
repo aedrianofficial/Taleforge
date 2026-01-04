@@ -30,12 +30,12 @@ function RootLayoutNav() {
       if (profile.is_admin) {
         // Admin user should be in admin group
         if (!inAdminGroup) {
-          router.replace('/(admin)');
+          router.replace('/(admin)' as any);
         }
       } else {
         // Regular user should be in user group
         if (!inUserGroup) {
-          router.replace('/(user)');
+          router.replace('/(user)' as any);
         }
       }
     }

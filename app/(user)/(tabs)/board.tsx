@@ -1,11 +1,12 @@
 import { supabase } from '@/src/config/supabase';
 import { useAuth } from '@/src/context/AuthContext';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
     Animated,
     FlatList,
+    Image,
     Keyboard,
     KeyboardAvoidingView,
     Modal,
@@ -22,6 +23,8 @@ import {
 
 const MAX_CHARACTERS = 500;
 const REACTION_COOLDOWN = 1500; // 1.5 seconds
+
+type FilterOption = 'newest' | 'highest_rated' | 'most_reacted';
 
 type ReactionType = 'like' | 'heart' | 'laugh';
 
@@ -50,6 +53,7 @@ type Post = {
     name: string;
     is_admin: boolean;
     privacy_posts_visible: boolean;
+    avatar_url?: string | null;
   };
   post_reactions?: PostReaction[];
   post_ratings?: PostRating[];
@@ -94,6 +98,11 @@ export default function BoardScreen() {
   // Toast state
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });
   const toastOpacity = useState(new Animated.Value(0))[0];
+  
+  // Search and filter state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterOption, setFilterOption] = useState<FilterOption>('newest');
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
 
   const showToast = useCallback((message: string) => {
     setToast({ message, visible: true });
@@ -118,6 +127,10 @@ export default function BoardScreen() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'post_ratings' }, () => {
         fetchAllPosts();
       })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'users' }, () => {
+        // Refresh posts when user profiles are updated (including avatar changes)
+        fetchAllPosts();
+      })
       .subscribe();
 
     return () => {
@@ -130,7 +143,7 @@ export default function BoardScreen() {
       .from('posts')
       .select(`
         *,
-        users(name, is_admin, privacy_posts_visible),
+        users(name, is_admin, privacy_posts_visible, avatar_url),
         post_reactions(id, post_id, user_id, reaction_type, users(name)),
         post_ratings(id, post_id, user_id, rating, users(name))
       `)
@@ -166,16 +179,52 @@ export default function BoardScreen() {
     setIsPosting(true);
     Keyboard.dismiss();
 
-    const { error } = await supabase
-      .from('posts')
-      .insert([{ text: postText.trim(), user_id: profile.id }]);
+    // Optimistic update - immediately add post to UI
+    const optimisticPost: Post = {
+      id: `temp-${Date.now()}`, // Temporary ID
+      text: postText.trim(),
+      created_at: new Date().toISOString(),
+      user_id: profile.id,
+      users: {
+        name: profile.name,
+        is_admin: false, // Regular users
+        privacy_posts_visible: profile.privacy_posts_visible ?? true,
+        avatar_url: profile.avatar_url
+      },
+      post_reactions: [],
+      post_ratings: []
+    };
 
-    if (error) {
+    // Add to posts state immediately
+    setPosts(prevPosts => [optimisticPost, ...prevPosts]);
+
+    // Clear the input immediately for better UX
+    setPostText('');
+    showToast('Post created successfully!');
+
+    try {
+      const { error } = await supabase
+        .from('posts')
+        .insert([{ text: postText.trim(), user_id: profile.id }]);
+
+      if (error) {
+        console.error('Error creating post:', error);
+        // Remove optimistic post on error
+        setPosts(prevPosts => prevPosts.filter(p => p.id !== optimisticPost.id));
+        Alert.alert('Error', 'Failed to create post. Please try again.');
+        // Restore the text so user can try again
+        setPostText(postText.trim());
+      }
+      // If successful, real-time subscription will update with real data
+    } catch (error) {
+      console.error('Error in handleCreatePost:', error);
+      // Remove optimistic post on error
+      setPosts(prevPosts => prevPosts.filter(p => p.id !== optimisticPost.id));
       Alert.alert('Error', 'Failed to create post. Please try again.');
-    } else {
-      setPostText('');
-      showToast('Post created successfully!');
+      // Restore the text so user can try again
+      setPostText(postText.trim());
     }
+
     setIsPosting(false);
   };
 
@@ -194,18 +243,54 @@ export default function BoardScreen() {
     }
 
     setIsSaving(true);
-    const { error } = await supabase
-      .from('posts')
-      .update({ text: editText.trim() })
-      .eq('id', editingPost.id);
 
-    if (error) {
-      Alert.alert('Error', 'Failed to update post');
-    } else {
-      showToast('Post updated successfully!');
-      setEditModalVisible(false);
-      setEditingPost(null);
+    // Optimistic update - immediately update UI
+    const originalText = editingPost.text;
+    setPosts(prevPosts =>
+      prevPosts.map(p =>
+        p.id === editingPost.id
+          ? { ...p, text: editText.trim() }
+          : p
+      )
+    );
+
+    // Close modal and clear editing state immediately
+    setEditModalVisible(false);
+    setEditingPost(null);
+    showToast('Post updated successfully!');
+
+    try {
+      const { error } = await supabase
+        .from('posts')
+        .update({ text: editText.trim() })
+        .eq('id', editingPost.id);
+
+      if (error) {
+        console.error('Error updating post:', error);
+        // Revert optimistic update on error
+        setPosts(prevPosts =>
+          prevPosts.map(p =>
+            p.id === editingPost.id
+              ? { ...p, text: originalText }
+              : p
+          )
+        );
+        Alert.alert('Error', 'Failed to update post. Changes have been reverted.');
+      }
+      // If successful, real-time subscription will confirm the update
+    } catch (error) {
+      console.error('Error in handleSaveEdit:', error);
+      // Revert optimistic update on error
+      setPosts(prevPosts =>
+        prevPosts.map(p =>
+          p.id === editingPost.id
+            ? { ...p, text: originalText }
+            : p
+        )
+      );
+      Alert.alert('Error', 'Failed to update post. Changes have been reverted.');
     }
+
     setIsSaving(false);
   };
 
@@ -220,15 +305,28 @@ export default function BoardScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            const { error } = await supabase
-              .from('posts')
-              .delete()
-              .eq('id', post.id);
+            // Optimistic update - immediately remove post from UI
+            setPosts(prevPosts => prevPosts.filter(p => p.id !== post.id));
+            showToast('Post deleted successfully');
 
-            if (error) {
-              Alert.alert('Error', 'Failed to delete post');
-            } else {
-              showToast('Post deleted successfully');
+            try {
+              const { error } = await supabase
+                .from('posts')
+                .delete()
+                .eq('id', post.id);
+
+              if (error) {
+                console.error('Error deleting post:', error);
+                // Revert optimistic update on error - need to refetch to restore
+                fetchAllPosts();
+                Alert.alert('Error', 'Failed to delete post. Post has been restored.');
+              }
+              // If successful, real-time subscription will confirm the deletion
+            } catch (error) {
+              console.error('Error in handleDeletePost:', error);
+              // Revert optimistic update on error
+              fetchAllPosts();
+              Alert.alert('Error', 'Failed to delete post. Post has been restored.');
             }
           },
         },
@@ -238,7 +336,7 @@ export default function BoardScreen() {
 
   const handleReaction = async (post: Post, reactionType: ReactionType) => {
     if (!profile?.id) return;
-    
+
     const cooldownKey = `${post.id}-${reactionType}`;
     if (reactionCooldowns[cooldownKey]) return;
 
@@ -252,24 +350,68 @@ export default function BoardScreen() {
       r => r.user_id === profile.id
     );
 
-    if (existingReaction) {
-      if (existingReaction.reaction_type === reactionType) {
-        // Remove reaction if same type
-        await supabase.from('post_reactions').delete().eq('id', existingReaction.id);
+    // Optimistic update - immediately update UI
+    setPosts(prevPosts => {
+      return prevPosts.map(p => {
+        if (p.id === post.id) {
+          const currentReactions = p.post_reactions || [];
+          let updatedReactions;
+
+          if (existingReaction) {
+            if (existingReaction.reaction_type === reactionType) {
+              // Remove reaction
+              updatedReactions = currentReactions.filter(r => r.id !== existingReaction.id);
+            } else {
+              // Update reaction type
+              updatedReactions = currentReactions.map(r =>
+                r.id === existingReaction.id
+                  ? { ...r, reaction_type: reactionType }
+                  : r
+              );
+            }
+          } else {
+            // Add new reaction (generate temporary ID for UI update)
+            const tempId = `temp-${Date.now()}`;
+            updatedReactions = [...currentReactions, {
+              id: tempId,
+              post_id: post.id,
+              user_id: profile.id,
+              reaction_type: reactionType,
+              users: { name: profile.name }
+            }];
+          }
+
+          return { ...p, post_reactions: updatedReactions };
+        }
+        return p;
+      });
+    });
+
+    // Then sync with server
+    try {
+      if (existingReaction) {
+        if (existingReaction.reaction_type === reactionType) {
+          // Remove reaction if same type
+          await supabase.from('post_reactions').delete().eq('id', existingReaction.id);
+        } else {
+          // Update to new reaction type
+          await supabase
+            .from('post_reactions')
+            .update({ reaction_type: reactionType })
+            .eq('id', existingReaction.id);
+        }
       } else {
-        // Update to new reaction type
-        await supabase
-          .from('post_reactions')
-          .update({ reaction_type: reactionType })
-          .eq('id', existingReaction.id);
+        // Add new reaction
+        await supabase.from('post_reactions').insert([{
+          post_id: post.id,
+          user_id: profile.id,
+          reaction_type: reactionType,
+        }]);
       }
-    } else {
-      // Add new reaction
-      await supabase.from('post_reactions').insert([{
-        post_id: post.id,
-        user_id: profile.id,
-        reaction_type: reactionType,
-      }]);
+    } catch (error) {
+      console.error('Error updating reaction:', error);
+      // Revert optimistic update on error by refreshing data
+      fetchAllPosts();
     }
   };
 
@@ -278,20 +420,61 @@ export default function BoardScreen() {
 
     const existingRating = ratingPost.post_ratings?.find(r => r.user_id === profile.id);
 
-    if (existingRating) {
-      await supabase
-        .from('post_ratings')
-        .update({ rating: selectedRating })
-        .eq('id', existingRating.id);
-    } else {
-      await supabase.from('post_ratings').insert([{
-        post_id: ratingPost.id,
-        user_id: profile.id,
-        rating: selectedRating,
-      }]);
+    // Optimistic update - immediately update UI
+    setPosts(prevPosts => {
+      return prevPosts.map(p => {
+        if (p.id === ratingPost.id) {
+          const currentRatings = p.post_ratings || [];
+          let updatedRatings;
+
+          if (existingRating) {
+            // Update existing rating
+            updatedRatings = currentRatings.map(r =>
+              r.id === existingRating.id
+                ? { ...r, rating: selectedRating }
+                : r
+            );
+          } else {
+            // Add new rating (generate temporary ID for UI update)
+            const tempId = `temp-rating-${Date.now()}`;
+            updatedRatings = [...currentRatings, {
+              id: tempId,
+              post_id: ratingPost.id,
+              user_id: profile.id,
+              rating: selectedRating,
+              users: { name: profile.name }
+            }];
+          }
+
+          return { ...p, post_ratings: updatedRatings };
+        }
+        return p;
+      });
+    });
+
+    // Then sync with server
+    try {
+      if (existingRating) {
+        await supabase
+          .from('post_ratings')
+          .update({ rating: selectedRating })
+          .eq('id', existingRating.id);
+      } else {
+        await supabase.from('post_ratings').insert([{
+          post_id: ratingPost.id,
+          user_id: profile.id,
+          rating: selectedRating,
+        }]);
+      }
+
+      showToast('Rating submitted!');
+    } catch (error) {
+      console.error('Error updating rating:', error);
+      showToast('Failed to submit rating');
+      // Revert optimistic update on error
+      fetchAllPosts();
     }
 
-    showToast('Rating submitted!');
     setRatingPost(null);
     setSelectedRating(0);
   };
@@ -341,14 +524,154 @@ export default function BoardScreen() {
     return profile?.id === post.user_id;
   };
 
+  // Filter and search posts
+  const filteredPosts = useMemo(() => {
+    let result = [...posts];
+    
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      result = result.filter(post => 
+        post.text.toLowerCase().includes(query) ||
+        post.users?.name?.toLowerCase().includes(query)
+      );
+    }
+    
+    // Apply sort filter
+    switch (filterOption) {
+      case 'highest_rated':
+        result.sort((a, b) => {
+          const avgA = getAverageRating(a);
+          const avgB = getAverageRating(b);
+          return avgB - avgA;
+        });
+        break;
+      case 'most_reacted':
+        result.sort((a, b) => {
+          const reactionsA = a.post_reactions?.length || 0;
+          const reactionsB = b.post_reactions?.length || 0;
+          return reactionsB - reactionsA;
+        });
+        break;
+      case 'newest':
+      default:
+        result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        break;
+    }
+    
+    return result;
+  }, [posts, searchQuery, filterOption]);
+
+  const getFilterLabel = (option: FilterOption): string => {
+    switch (option) {
+      case 'newest': return 'Newest First';
+      case 'highest_rated': return 'Highest Rated';
+      case 'most_reacted': return 'Most Reacted';
+      default: return 'Newest First';
+    }
+  };
+
+  const renderSearchAndFilter = () => (
+    <View style={styles.searchFilterContainer}>
+      <View style={styles.searchInputWrapper}>
+        <Text style={styles.searchIcon}>🔍</Text>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search posts..."
+          placeholderTextColor="#6E6E73"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          returnKeyType="search"
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearButton}>
+            <Text style={styles.clearButtonText}>✕</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      
+      <View style={styles.filterWrapper}>
+        <TouchableOpacity 
+          style={styles.filterButton}
+          onPress={() => setShowFilterDropdown(!showFilterDropdown)}>
+          <Text style={styles.filterIcon}>⚙️</Text>
+          <Text style={styles.filterButtonText}>{getFilterLabel(filterOption)}</Text>
+          <Text style={styles.filterArrow}>{showFilterDropdown ? '▲' : '▼'}</Text>
+        </TouchableOpacity>
+        
+        {showFilterDropdown && (
+          <View style={styles.filterDropdown}>
+            {(['newest', 'highest_rated', 'most_reacted'] as FilterOption[]).map((option) => (
+              <TouchableOpacity
+                key={option}
+                style={[
+                  styles.filterOption,
+                  filterOption === option && styles.filterOptionActive,
+                ]}
+                onPress={() => {
+                  setFilterOption(option);
+                  setShowFilterDropdown(false);
+                }}>
+                <Text style={[
+                  styles.filterOptionText,
+                  filterOption === option && styles.filterOptionTextActive,
+                ]}>
+                  {getFilterLabel(option)}
+                </Text>
+                {filterOption === option && <Text style={styles.checkmark}>✓</Text>}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+      </View>
+      
+      {(searchQuery || filterOption !== 'newest') && (
+        <View style={styles.activeFiltersRow}>
+          {searchQuery && (
+            <View style={styles.activeFilterChip}>
+              <Text style={styles.activeFilterText}>"{searchQuery}"</Text>
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Text style={styles.removeFilterText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {filterOption !== 'newest' && (
+            <View style={styles.activeFilterChip}>
+              <Text style={styles.activeFilterText}>{getFilterLabel(filterOption)}</Text>
+              <TouchableOpacity onPress={() => setFilterOption('newest')}>
+                <Text style={styles.removeFilterText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          <TouchableOpacity 
+            style={styles.clearAllButton}
+            onPress={() => {
+              setSearchQuery('');
+              setFilterOption('newest');
+            }}>
+            <Text style={styles.clearAllText}>Clear All</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      
+      <Text style={styles.resultsCount}>
+        {filteredPosts.length} {filteredPosts.length === 1 ? 'post' : 'posts'} found
+      </Text>
+    </View>
+  );
+
   const renderComposer = () => (
     <View style={styles.composerCard}>
       <View style={styles.composerHeader}>
-        <View style={styles.composerAvatar}>
-          <Text style={styles.composerAvatarText}>
-            {(profile?.name || 'U')[0].toUpperCase()}
-          </Text>
-        </View>
+        {profile?.avatar_url ? (
+          <Image source={{ uri: profile.avatar_url }} style={styles.composerAvatarImage} />
+        ) : (
+          <View style={styles.composerAvatar}>
+            <Text style={styles.composerAvatarText}>
+              {(profile?.name || 'U')[0].toUpperCase()}
+            </Text>
+          </View>
+        )}
         <View style={styles.composerUserInfo}>
           <Text style={styles.composerUserName}>{profile?.name || 'User'}</Text>
           <View style={styles.roleBadge}>
@@ -402,22 +725,29 @@ export default function BoardScreen() {
     const totalRatings = item.post_ratings?.length || 0;
 
     return (
-      <View style={styles.postCard}>
+    <View style={styles.postCard}>
         {/* Post Header */}
-        <View style={styles.postHeader}>
-          <View style={[styles.avatar, item.users?.is_admin && styles.adminAvatar]}>
-            <Text style={styles.avatarText}>
-              {(item.users?.name || 'U')[0].toUpperCase()}
-            </Text>
-          </View>
+      <View style={styles.postHeader}>
+          {item.users?.avatar_url ? (
+            <Image 
+              source={{ uri: item.users.avatar_url }} 
+              style={[styles.avatarImage, item.users?.is_admin && styles.adminAvatarBorder]} 
+            />
+          ) : (
+            <View style={[styles.avatar, item.users?.is_admin && styles.adminAvatar]}>
+          <Text style={styles.avatarText}>
+            {(item.users?.name || 'U')[0].toUpperCase()}
+          </Text>
+        </View>
+          )}
           <View style={styles.postHeaderInfo}>
             <View style={styles.authorRow}>
-              <Text style={styles.authorName}>{item.users?.name || 'Unknown'}</Text>
+        <Text style={styles.authorName}>{item.users?.name || 'Unknown'}</Text>
               <View style={[styles.roleBadgeSmall, item.users?.is_admin && styles.adminBadge]}>
                 <Text style={[styles.roleBadgeSmallText, item.users?.is_admin && styles.adminBadgeText]}>
                   {item.users?.is_admin ? 'Admin' : 'User'}
                 </Text>
-              </View>
+      </View>
             </View>
             <Text style={styles.postDate}>{formatDate(item.created_at)}</Text>
           </View>
@@ -445,12 +775,12 @@ export default function BoardScreen() {
         )}
         
         {/* Post Text */}
-        <Text style={styles.postText}>{item.text}</Text>
+      <Text style={styles.postText}>{item.text}</Text>
         
         {/* Reactions Bar */}
         <View style={styles.reactionsBar}>
           {(Object.keys(REACTION_EMOJIS) as ReactionType[]).map((type) => (
-            <TouchableOpacity
+        <TouchableOpacity
               key={type}
               style={[
                 styles.reactionButton,
@@ -466,7 +796,7 @@ export default function BoardScreen() {
               ]}>
                 {reactionCounts[type]}
               </Text>
-            </TouchableOpacity>
+        </TouchableOpacity>
           ))}
         </View>
 
@@ -491,7 +821,7 @@ export default function BoardScreen() {
                   ★
                 </Text>
               ))}
-            </View>
+      </View>
             <Text style={styles.ratingText}>
               {avgRating > 0 ? avgRating.toFixed(1) : '0.0'} · Rated by {totalRatings} user{totalRatings !== 1 ? 's' : ''}
             </Text>
@@ -520,7 +850,7 @@ export default function BoardScreen() {
             <Text style={styles.viewLinkText}>View all ratings</Text>
           </TouchableOpacity>
         )}
-      </View>
+    </View>
     );
   };
 
@@ -668,7 +998,7 @@ export default function BoardScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
       <FlatList
-        data={posts}
+        data={filteredPosts}
         renderItem={renderPost}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
@@ -684,14 +1014,19 @@ export default function BoardScreen() {
               <Text style={styles.pageTitle}>Board</Text>
               <Text style={styles.pageSubtitle}>Share and discover posts</Text>
             </View>
+            {renderSearchAndFilter()}
             {renderComposer()}
           </>
         }
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>📭</Text>
-            <Text style={styles.emptyText}>No posts yet</Text>
-            <Text style={styles.emptySubtext}>Be the first to share something!</Text>
+            <Text style={styles.emptyIcon}>{searchQuery ? '🔍' : '📭'}</Text>
+            <Text style={styles.emptyText}>
+              {searchQuery ? 'No results found' : 'No posts yet'}
+            </Text>
+            <Text style={styles.emptySubtext}>
+              {searchQuery ? 'Try a different search term' : 'Be the first to share something!'}
+            </Text>
           </View>
         }
       />
@@ -732,6 +1067,147 @@ const styles = StyleSheet.create({
     color: '#8E8E93',
     marginTop: 4,
   },
+  // Search and filter styles
+  searchFilterContainer: {
+    marginBottom: 16,
+  },
+  searchInputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1C1C1E',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+    marginBottom: 12,
+  },
+  searchIcon: {
+    fontSize: 16,
+    marginRight: 10,
+  },
+  searchInput: {
+    flex: 1,
+    height: 46,
+    fontSize: 16,
+    color: '#FFFFFF',
+  },
+  clearButton: {
+    padding: 6,
+  },
+  clearButtonText: {
+    fontSize: 14,
+    color: '#8E8E93',
+  },
+  filterWrapper: {
+    position: 'relative',
+    zIndex: 10,
+  },
+  filterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1C1C1E',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+    gap: 8,
+  },
+  filterIcon: {
+    fontSize: 14,
+  },
+  filterButtonText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#FFFFFF',
+    fontWeight: '500',
+  },
+  filterArrow: {
+    fontSize: 10,
+    color: '#8E8E93',
+  },
+  filterDropdown: {
+    position: 'absolute',
+    top: 50,
+    left: 0,
+    right: 0,
+    backgroundColor: '#2C2C2E',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#3A3A3C',
+    overflow: 'hidden',
+    zIndex: 100,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  filterOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#3A3A3C',
+  },
+  filterOptionActive: {
+    backgroundColor: 'rgba(196, 165, 116, 0.15)',
+  },
+  filterOptionText: {
+    fontSize: 15,
+    color: '#FFFFFF',
+  },
+  filterOptionTextActive: {
+    color: '#C4A574',
+    fontWeight: '600',
+  },
+  checkmark: {
+    fontSize: 16,
+    color: '#C4A574',
+    fontWeight: '700',
+  },
+  activeFiltersRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+  },
+  activeFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(196, 165, 116, 0.2)',
+    borderRadius: 20,
+    paddingVertical: 6,
+    paddingLeft: 12,
+    paddingRight: 8,
+    gap: 6,
+  },
+  activeFilterText: {
+    fontSize: 13,
+    color: '#C4A574',
+  },
+  removeFilterText: {
+    fontSize: 12,
+    color: '#C4A574',
+    fontWeight: '600',
+  },
+  clearAllButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  clearAllText: {
+    fontSize: 13,
+    color: '#8E8E93',
+    textDecorationLine: 'underline',
+  },
+  resultsCount: {
+    fontSize: 13,
+    color: '#6E6E73',
+    marginTop: 12,
+  },
   // Composer styles
   composerCard: {
     backgroundColor: '#1C1C1E',
@@ -758,6 +1234,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#C4A574',
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: 12,
+  },
+  composerAvatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     marginRight: 12,
   },
   composerAvatarText: {
@@ -860,8 +1342,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: 12,
   },
+  avatarImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    marginRight: 12,
+  },
   adminAvatar: {
     backgroundColor: '#5E5CE6',
+  },
+  adminAvatarBorder: {
+    borderWidth: 2,
+    borderColor: '#5E5CE6',
   },
   avatarText: {
     fontSize: 18,

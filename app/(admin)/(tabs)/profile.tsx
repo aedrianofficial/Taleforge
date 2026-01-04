@@ -2,7 +2,7 @@ import { supabase } from '@/src/config/supabase';
 import { useAuth } from '@/src/context/AuthContext';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -70,6 +70,21 @@ export default function AdminProfileScreen() {
   // Toast state
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });
   const toastOpacity = useState(new Animated.Value(0))[0];
+  
+  // Ref for tracking password update timeout
+  const passwordUpdateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMountedRef = useRef(true);
+  
+  // Cleanup on unmount
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (passwordUpdateTimeoutRef.current) {
+        clearTimeout(passwordUpdateTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const showToast = useCallback((message: string) => {
     setToast({ message, visible: true });
@@ -349,12 +364,52 @@ export default function AdminProfileScreen() {
     console.log('Starting password update...');
     setIsUpdatingPassword(true);
     
+    // Track if we've already handled the response
+    let handled = false;
+    
+    // Clear any existing timeout
+    if (passwordUpdateTimeoutRef.current) {
+      clearTimeout(passwordUpdateTimeoutRef.current);
+    }
+    
+    // Set a UI timeout - if no response in 15 seconds, show a message but don't assume success
+    passwordUpdateTimeoutRef.current = setTimeout(() => {
+      if (!handled && isMountedRef.current) {
+        handled = true;
+        console.log('Password update taking too long...');
+        setIsUpdatingPassword(false);
+        setNewPassword('');
+        setConfirmPassword('');
+        setSecurityModalVisible(false);
+        
+        Alert.alert(
+          'Request Sent',
+          'Your password change request was sent. If you don\'t receive a confirmation, please try again or check your email.',
+          [{ text: 'OK' }]
+        );
+      }
+    }, 15000);
+    
     try {
       console.log('Calling updatePassword function...');
       const result = await updatePassword(newPassword);
+      
+      // Clear timeout since we got a response
+      if (passwordUpdateTimeoutRef.current) {
+        clearTimeout(passwordUpdateTimeoutRef.current);
+        passwordUpdateTimeoutRef.current = null;
+      }
+      
+      // If already handled by timeout or component unmounted, don't update state
+      if (handled || !isMountedRef.current) {
+        console.log('Response received after timeout or unmount, ignoring');
+        return;
+      }
+      
+      handled = true;
       console.log('updatePassword completed with result:', result);
 
-      // Stop loading first
+      // Stop loading
       setIsUpdatingPassword(false);
 
       if (result.error) {
@@ -366,20 +421,32 @@ export default function AdminProfileScreen() {
       } else {
         console.log('Password update successful! Closing modal...');
         
-        // Clear form and close modal first
+        // Clear form and close modal
         setNewPassword('');
         setConfirmPassword('');
         setSecurityModalVisible(false);
         
-        // Show success feedback
-        showToast('Password updated successfully!');
-        
-        // Also show alert for confirmation
+        // Show success feedback after a small delay to ensure modal is closed
         setTimeout(() => {
-          Alert.alert('Success', 'Your password has been updated successfully!');
+          if (isMountedRef.current) {
+            showToast('Password updated successfully!');
+          }
         }, 100);
       }
     } catch (error: any) {
+      // Clear timeout
+      if (passwordUpdateTimeoutRef.current) {
+        clearTimeout(passwordUpdateTimeoutRef.current);
+        passwordUpdateTimeoutRef.current = null;
+      }
+      
+      // If already handled by timeout or component unmounted, don't update state
+      if (handled || !isMountedRef.current) {
+        console.log('Error received after timeout or unmount, ignoring');
+        return;
+      }
+      
+      handled = true;
       console.error('Unexpected error in handlePasswordUpdate:', error);
       setIsUpdatingPassword(false);
       Alert.alert('Error', 'An unexpected error occurred. Please try again.');
