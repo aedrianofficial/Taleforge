@@ -44,6 +44,18 @@ export default function UserHome() {
         
         <View style={styles.featureCard}>
           <View style={styles.featureIconWrapper}>
+            <Text style={styles.featureIcon}>🎭</Text>
+          </View>
+          <View style={styles.featureContent}>
+            <Text style={styles.featureTitle}>Interactive Stories</Text>
+            <Text style={styles.featureDescription}>
+              Immerse yourself in choose-your-own-adventure stories with branching paths, multiple endings, and interactive choices that shape your narrative journey.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.featureCard}>
+          <View style={styles.featureIconWrapper}>
             <Text style={styles.featureIcon}>✍️</Text>
           </View>
           <View style={styles.featureContent}>
@@ -95,14 +107,24 @@ export default function UserHome() {
       <View style={styles.ctaSection}>
         <Text style={styles.ctaTitle}>Ready to start?</Text>
         <Text style={styles.ctaDescription}>
-          Head over to the Board to create your first post and see what others are sharing!
+          Choose your adventure: explore interactive stories or join the community on the Board!
         </Text>
-        <TouchableOpacity 
-          style={styles.ctaButton}
-          onPress={() => router.push('/(user)/board')}>
-          <Text style={styles.ctaButtonText}>Go to Board</Text>
-          <Text style={styles.ctaButtonIcon}>→</Text>
-        </TouchableOpacity>
+        <View style={styles.ctaButtonsContainer}>
+          <TouchableOpacity
+            style={[styles.ctaButton, styles.ctaButtonSecondary]}
+            onPress={() => router.push('/(user)/(tabs)/stories')}>
+            <Text style={styles.featureIcon}>🎭</Text>
+            <Text style={styles.ctaButtonTextSecondary}>Explore Stories</Text>
+            <Text style={styles.ctaButtonIconSecondary}>→</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.ctaButton}
+            onPress={() => router.push('/(user)/(tabs)/board')}>
+            <Text style={styles.featureIcon}>📝</Text>
+            <Text style={styles.ctaButtonText}>Visit Board</Text>
+            <Text style={styles.ctaButtonIcon}>→</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Footer Info */}
@@ -238,23 +260,46 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     marginBottom: 20,
   },
+  ctaButtonsContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
   ctaButton: {
+    flex: 1,
     flexDirection: 'row',
     backgroundColor: '#C4A574',
-    paddingHorizontal: 28,
+    paddingHorizontal: 16,
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ctaButtonSecondary: {
+    backgroundColor: '#2C2C2E',
+    borderWidth: 1,
+    borderColor: '#C4A574',
   },
   ctaButtonText: {
     color: '#0D0D0D',
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: '600',
-    marginRight: 8,
+    marginHorizontal: 6,
+  },
+  ctaButtonTextSecondary: {
+    color: '#C4A574',
+    fontSize: 15,
+    fontWeight: '600',
+    marginHorizontal: 6,
+  },
+  ctaButtonIconSecondary: {
+    color: '#C4A574',
+    fontSize: 16,
+    fontWeight: '600',
   },
   ctaButtonIcon: {
     color: '#0D0D0D',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
   },
   footerSection: {

@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -28,6 +29,12 @@ interface Story {
     name: string;
   };
   story_parts?: StoryPart[];
+  average_rating: number;
+  total_ratings: number;
+  likes?: number;
+  dislikes?: number;
+  user_reaction?: 'like' | 'dislike' | null;
+  user_rating?: number | null;
 }
 
 interface StoryPart {
@@ -40,6 +47,7 @@ interface StoryPart {
 
 interface StoryChoice {
   id: string;
+  part_id: string;
   choice_text: string;
   next_part_id: string | null;
   order_index: number;
@@ -59,16 +67,82 @@ export default function StoryReviewScreen() {
   const [partModalVisible, setPartModalVisible] = useState(false);
   const [partContent, setPartContent] = useState('');
   const [addingPart, setAddingPart] = useState(false);
+  const [addingChoice, setAddingChoice] = useState(false);
+  const [expandedParts, setExpandedParts] = useState<Set<string>>(new Set());
+  const [expandedChoices, setExpandedChoices] = useState<Set<string>>(new Set());
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editGenre, setEditGenre] = useState('');
   const [editing, setEditing] = useState(false);
 
+  // Reactions and ratings state
+  const [userReactions, setUserReactions] = useState<any[]>([]);
+  const [userRatings, setUserRatings] = useState<any[]>([]);
+  const [loadingUserDetails, setLoadingUserDetails] = useState(false);
+  const [reactionsModalVisible, setReactionsModalVisible] = useState(false);
+  const [ratingsModalVisible, setRatingsModalVisible] = useState(false);
+
+  // Edit part modal state
+  const [editPartModalVisible, setEditPartModalVisible] = useState(false);
+  const [editingPart, setEditingPart] = useState<StoryPart | null>(null);
+  const [editPartContent, setEditPartContent] = useState('');
+  const [editPartIsStarting, setEditPartIsStarting] = useState(false);
+  const [editPartIsEnding, setEditPartIsEnding] = useState(false);
+  const [savingPartEdit, setSavingPartEdit] = useState(false);
+
+  // Edit choice modal state
+  const [editChoiceModalVisible, setEditChoiceModalVisible] = useState(false);
+  const [editingChoice, setEditingChoice] = useState<StoryChoice | null>(null);
+  const [editChoiceText, setEditChoiceText] = useState('');
+  const [editChoiceNextPartId, setEditChoiceNextPartId] = useState<string | null>(null);
+  const [savingChoiceEdit, setSavingChoiceEdit] = useState(false);
+
   useEffect(() => {
     if (storyId) {
       loadStory();
     }
+  }, [storyId]);
+
+  // Real-time subscription for story reactions and ratings
+  useEffect(() => {
+    if (!storyId) return;
+
+    const subscription = supabase
+      .channel(`admin-story-reactions-${storyId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'story_reactions',
+          filter: `story_id=eq.${storyId}`,
+        },
+        async (payload) => {
+          console.log('Admin story reaction change detected:', payload);
+          // Reload story data to get updated reaction counts
+          await loadStory();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'story_ratings',
+          filter: `story_id=eq.${storyId}`,
+        },
+        async (payload) => {
+          console.log('Admin story rating change detected:', payload);
+          // Reload story data to get updated rating data
+          await loadStory();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, [storyId]);
 
   const loadStory = useCallback(async () => {
@@ -86,6 +160,60 @@ export default function StoryReviewScreen() {
         .single();
 
       if (storyError) throw storyError;
+
+      // Get ratings for the story
+      const { data: ratings, error: ratingsError } = await supabase
+        .from('story_ratings')
+        .select('rating')
+        .eq('story_id', storyId);
+
+      if (ratingsError) {
+        console.error('Error fetching ratings for story:', storyId, ratingsError);
+      }
+
+      const totalRatings = ratings?.length || 0;
+      const averageRating = totalRatings > 0
+        ? ratings!.reduce((sum, r) => sum + r.rating, 0) / totalRatings
+        : 0;
+
+      // Get reactions
+      const { data: reactions, error: reactionsError } = await supabase
+        .from('story_reactions')
+        .select('reaction_type')
+        .eq('story_id', storyId);
+
+      if (reactionsError) {
+        console.error('Error fetching reactions for story:', storyId, reactionsError);
+      }
+
+      const likes = reactions?.filter(r => r.reaction_type === 'like').length || 0;
+      const dislikes = reactions?.filter(r => r.reaction_type === 'dislike').length || 0;
+
+      // Get admin's personal reaction
+      const { data: adminReaction } = await supabase
+        .from('story_reactions')
+        .select('reaction_type')
+        .eq('user_id', user?.id)
+        .eq('story_id', storyId)
+        .single();
+
+      // Get admin's personal rating
+      const { data: adminRating } = await supabase
+        .from('story_ratings')
+        .select('rating')
+        .eq('user_id', user?.id)
+        .eq('story_id', storyId)
+        .single();
+
+      const storyWithRating = {
+        ...storyData,
+        average_rating: Math.round(averageRating * 10) / 10, // Round to 1 decimal place
+        total_ratings: totalRatings,
+        likes: likes,
+        dislikes: dislikes,
+        user_reaction: adminReaction?.reaction_type || null,
+        user_rating: adminRating?.rating || null,
+      };
 
       // Also load story parts
       const { data: parts, error: partsError } = await supabase
@@ -118,7 +246,7 @@ export default function StoryReviewScreen() {
         })
       );
 
-      setStory({ ...storyData, story_parts: partsWithChoices });
+      setStory({ ...storyWithRating, story_parts: partsWithChoices });
     } catch (error) {
       console.error('Error loading story:', error);
       Alert.alert('Error', 'Failed to load story');
@@ -225,17 +353,40 @@ export default function StoryReviewScreen() {
     }
   };
 
+  const togglePartExpansion = (partId: string) => {
+    const newExpanded = new Set(expandedParts);
+    if (newExpanded.has(partId)) {
+      newExpanded.delete(partId);
+    } else {
+      newExpanded.add(partId);
+    }
+    setExpandedParts(newExpanded);
+  };
+
+  const toggleChoiceExpansion = (choiceId: string) => {
+    const newExpanded = new Set(expandedChoices);
+    if (newExpanded.has(choiceId)) {
+      newExpanded.delete(choiceId);
+    } else {
+      newExpanded.add(choiceId);
+    }
+    setExpandedChoices(newExpanded);
+  };
+
   const openAddChoiceModal = (partId: string) => {
     setSelectedPartId(partId);
     setChoiceText('');
     setSelectedNextPartId(null);
+    setAddingChoice(false);
     setChoiceModalVisible(true);
   };
 
   const handleAddChoice = async () => {
-    if (!selectedPartId || !choiceText.trim() || !story) return;
+    if (!selectedPartId || !choiceText.trim() || !story || addingChoice) return;
 
     try {
+      setAddingChoice(true);
+
       const { error } = await supabase
         .from('story_choices')
         .insert({
@@ -250,11 +401,15 @@ export default function StoryReviewScreen() {
       // Reload story parts
       await loadStoryParts();
       setChoiceModalVisible(false);
+      setChoiceText('');
+      setSelectedNextPartId(null);
 
       Alert.alert('Success', 'Choice added successfully');
     } catch (error) {
       console.error('Error adding choice:', error);
       Alert.alert('Error', 'Failed to add choice');
+    } finally {
+      setAddingChoice(false);
     }
   };
 
@@ -301,91 +456,58 @@ export default function StoryReviewScreen() {
   };
 
   const editChoice = async (choice: StoryChoice) => {
-    if (!story?.story_parts) return;
+    setEditingChoice(choice);
+    setEditChoiceText(choice.choice_text);
+    setEditChoiceNextPartId(choice.next_part_id);
+    setEditChoiceModalVisible(true);
+  };
 
-    // Get available parts for linking (excluding the part this choice belongs to)
-    const currentPart = story.story_parts.find(p => p.choices?.some(c => c.id === choice.id));
-    const availableParts = story.story_parts.filter(part => part.id !== currentPart?.id);
+  const handleSaveChoiceEdit = async () => {
+    if (!editingChoice || !editChoiceText.trim()) {
+      Alert.alert('Error', 'Please enter choice text');
+      return;
+    }
 
-    const partOptions = availableParts.map((part, index) =>
-      `${index + 1}. "${part.content.substring(0, 30)}..."`
-    ).join('\n');
+    try {
+      setSavingChoiceEdit(true);
 
-    Alert.prompt(
-      'Edit Choice',
-      `Enter the new choice text:\n\nAvailable parts to link to:\n${partOptions}\n\nEnter the number of the part to link to, or leave blank for no link.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Save',
-          onPress: async (input: string | undefined) => {
-            if (!input?.trim()) return;
+      const { error } = await supabase
+        .from('story_choices')
+        .update({
+          choice_text: editChoiceText.trim(),
+          next_part_id: editChoiceNextPartId,
+          modified_by: user?.id,
+          modified_at: new Date().toISOString(),
+        })
+        .eq('id', editingChoice.id);
 
-            const lines = input.trim().split('\n');
-            const choiceText = lines[0].trim();
-            const linkIndex = lines.length > 1 ? parseInt(lines[lines.length - 1].trim()) - 1 : -1;
+      if (error) throw error;
 
-            let nextPartId = null;
-            if (linkIndex >= 0 && linkIndex < availableParts.length) {
-              nextPartId = availableParts[linkIndex].id;
-            }
+      // Log the change
+      await supabase
+        .from('story_audit_log')
+        .insert({
+          story_id: story?.id,
+          choice_id: editingChoice.id,
+          action: 'update',
+          field_changed: 'choice_text',
+          old_value: editingChoice.choice_text,
+          new_value: editChoiceText.trim(),
+          performed_by: user?.id,
+        });
 
-            try {
-              const { error } = await supabase
-                .from('story_choices')
-                .update({
-                  choice_text: choiceText,
-                  next_part_id: nextPartId,
-                  modified_by: user?.id,
-                  modified_at: new Date().toISOString(),
-                })
-                .eq('id', choice.id);
+      // Reload story parts
+      await loadStoryParts();
 
-              if (error) throw error;
-
-              // Log the changes
-              if (choice.choice_text !== choiceText) {
-                await supabase
-                  .from('story_audit_log')
-                  .insert({
-                    story_id: story?.id,
-                    choice_id: choice.id,
-                    action: 'update',
-                    field_changed: 'choice_text',
-                    old_value: choice.choice_text,
-                    new_value: choiceText,
-                    performed_by: user?.id,
-                  });
-              }
-
-              if (choice.next_part_id !== nextPartId) {
-                await supabase
-                  .from('story_audit_log')
-                  .insert({
-                    story_id: story?.id,
-                    choice_id: choice.id,
-                    action: 'update',
-                    field_changed: 'next_part_id',
-                    old_value: choice.next_part_id || 'null',
-                    new_value: nextPartId || 'null',
-                    performed_by: user?.id,
-                  });
-              }
-
-              // Reload story parts
-              await loadStoryParts();
-
-              Alert.alert('Success', 'Choice updated successfully');
-            } catch (error) {
-              console.error('Error updating choice:', error);
-              Alert.alert('Error', 'Failed to update choice');
-            }
-          }
-        }
-      ],
-      'plain-text',
-      `${choice.choice_text}\n\n${availableParts.findIndex(p => p.id === choice.next_part_id) + 1 || ''}`
-    );
+      setEditChoiceModalVisible(false);
+      setEditingChoice(null);
+      Alert.alert('Success', 'Choice updated successfully');
+    } catch (error) {
+      console.error('Error updating choice:', error);
+      Alert.alert('Error', 'Failed to update choice');
+    } finally {
+      setSavingChoiceEdit(false);
+    }
   };
 
   const openAddPartModal = () => {
@@ -544,56 +666,63 @@ export default function StoryReviewScreen() {
     );
   };
 
-  const handleEditPart = (part: any) => {
-    Alert.prompt(
-      'Edit Story Part',
-      'Enter the new content for this story part:',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Save',
-          onPress: async (newContent: string | undefined) => {
-            if (!newContent?.trim()) return;
+  const handleEditPart = (part: StoryPart) => {
+    setEditingPart(part);
+    setEditPartContent(part.content);
+    setEditPartIsStarting(part.is_start);
+    setEditPartIsEnding(part.is_ending);
+    setEditPartModalVisible(true);
+  };
 
-            try {
-              const { error } = await supabase
-                .from('story_parts')
-                .update({
-                  content: newContent.trim(),
-                  modified_by: user?.id,
-                  modified_at: new Date().toISOString(),
-                })
-                .eq('id', part.id);
+  const handleSavePartEdit = async () => {
+    if (!editingPart || !editPartContent.trim()) {
+      Alert.alert('Error', 'Please enter content for the story part');
+      return;
+    }
 
-              if (error) throw error;
+    try {
+      setSavingPartEdit(true);
 
-              // Log the change
-              await supabase
-                .from('story_audit_log')
-                .insert({
-                  story_id: story?.id,
-                  part_id: part.id,
-                  action: 'update',
-                  field_changed: 'content',
-                  old_value: part.content,
-                  new_value: newContent.trim(),
-                  performed_by: user?.id,
-                });
+      const partData = {
+        content: editPartContent.trim(),
+        is_start: editPartIsStarting,
+        is_ending: editPartIsEnding,
+        modified_by: user?.id,
+        modified_at: new Date().toISOString(),
+      };
 
-              // Reload story parts
-              await loadStoryParts();
+      const { error } = await supabase
+        .from('story_parts')
+        .update(partData)
+        .eq('id', editingPart.id);
 
-              Alert.alert('Success', 'Story part updated successfully');
-            } catch (error) {
-              console.error('Error updating story part:', error);
-              Alert.alert('Error', 'Failed to update story part');
-            }
-          }
-        }
-      ],
-      'plain-text',
-      part.content
-    );
+      if (error) throw error;
+
+      // Log the change
+      await supabase
+        .from('story_audit_log')
+        .insert({
+          story_id: story?.id,
+          part_id: editingPart.id,
+          action: 'update',
+          field_changed: 'content',
+          old_value: editingPart.content,
+          new_value: editPartContent.trim(),
+          performed_by: user?.id,
+        });
+
+      // Reload story parts
+      await loadStoryParts();
+
+      setEditPartModalVisible(false);
+      setEditingPart(null);
+      Alert.alert('Success', 'Story part updated successfully');
+    } catch (error) {
+      console.error('Error updating story part:', error);
+      Alert.alert('Error', 'Failed to update story part');
+    } finally {
+      setSavingPartEdit(false);
+    }
   };
 
   const handleDeletePart = (part: any) => {
@@ -657,12 +786,16 @@ export default function StoryReviewScreen() {
 
     try {
       setAddingPart(true);
+      // Check if this is the first part
+      const hasNoParts = !story.story_parts || story.story_parts.length === 0;
+      const shouldMarkAsStart = hasNoParts; // First part should be starting
+
       const { data: partData, error: partError } = await supabase
         .from('story_parts')
         .insert({
           story_id: story.id,
           content: partContent.trim(),
-          is_start: false, // Additional parts are not starting parts
+          is_start: shouldMarkAsStart,
           is_ending: false,
           created_by: user?.id,
         })
@@ -813,6 +946,168 @@ export default function StoryReviewScreen() {
     );
   };
 
+  const handleAdminReaction = async (reactionType: 'like' | 'dislike') => {
+    if (!user?.id || !story) return;
+
+    try {
+      const currentReaction = story.user_reaction;
+
+      if (currentReaction === reactionType) {
+        // Remove reaction
+        const { error } = await supabase
+          .from('story_reactions')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('story_id', story.id);
+
+        if (error) throw error;
+
+        // Update local state
+        setStory(prev => prev ? {
+          ...prev,
+          likes: reactionType === 'like' ? (prev.likes || 0) - 1 : (prev.likes || 0),
+          dislikes: reactionType === 'dislike' ? (prev.dislikes || 0) - 1 : (prev.dislikes || 0),
+          user_reaction: null
+        } : null);
+      } else {
+        // Delete existing reaction first, then insert new one
+        if (currentReaction) {
+          await supabase
+            .from('story_reactions')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('story_id', story.id);
+        }
+
+        const { error } = await supabase
+          .from('story_reactions')
+          .insert({
+            user_id: user.id,
+            story_id: story.id,
+            reaction_type: reactionType
+          });
+
+        if (error) throw error;
+
+        // Update local state
+        setStory(prev => prev ? {
+          ...prev,
+          likes: reactionType === 'like'
+            ? (currentReaction === 'dislike' ? (prev.likes || 0) + 1 : (prev.likes || 0) + (currentReaction ? 0 : 1))
+            : (currentReaction === 'like' ? (prev.likes || 0) - 1 : (prev.likes || 0)),
+          dislikes: reactionType === 'dislike'
+            ? (currentReaction === 'like' ? (prev.dislikes || 0) + 1 : (prev.dislikes || 0) + (currentReaction ? 0 : 1))
+            : (currentReaction === 'dislike' ? (prev.dislikes || 0) - 1 : (prev.dislikes || 0)),
+          user_reaction: reactionType
+        } : null);
+      }
+    } catch (error) {
+      console.error('Error handling admin reaction:', error);
+      Alert.alert('Error', 'Failed to update reaction');
+    }
+  };
+
+  const handleAdminRating = async (rating: number) => {
+    if (!user?.id || !story) return;
+
+    try {
+      if (story.user_rating === rating) {
+        // Remove rating
+        const { error } = await supabase
+          .from('story_ratings')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('story_id', story.id);
+
+        if (error) throw error;
+
+        // Update local state
+        setStory(prev => prev ? {
+          ...prev,
+          total_ratings: Math.max(0, (prev.total_ratings || 0) - 1),
+          average_rating: (prev.total_ratings || 0) > 1
+            ? ((prev.average_rating || 0) * (prev.total_ratings || 0) - rating) / ((prev.total_ratings || 0) - 1)
+            : 0,
+          user_rating: null
+        } : null);
+      } else {
+        // Upsert rating
+        const { error } = await supabase
+          .from('story_ratings')
+          .upsert({
+            user_id: user.id,
+            story_id: story.id,
+            rating: rating
+          }, {
+            onConflict: 'user_id,story_id'
+          });
+
+        if (error) throw error;
+
+        // Update local state
+        const wasRated = story.user_rating !== null;
+        const oldRating = story.user_rating || 0;
+        const newTotal = wasRated ? (story.total_ratings || 0) : (story.total_ratings || 0) + 1;
+        const newAverage = wasRated
+          ? ((story.average_rating || 0) * (story.total_ratings || 0) - oldRating + rating) / (story.total_ratings || 0)
+          : ((story.average_rating || 0) * (story.total_ratings || 0) + rating) / newTotal;
+
+        setStory(prev => prev ? {
+          ...prev,
+          total_ratings: newTotal,
+          average_rating: Math.round(newAverage * 10) / 10,
+          user_rating: rating
+        } : null);
+      }
+    } catch (error) {
+      console.error('Error handling admin rating:', error);
+      Alert.alert('Error', 'Failed to update rating');
+    }
+  };
+
+  const loadUserDetails = async (viewType: 'reactions' | 'ratings') => {
+    if (!story) return;
+
+    try {
+      setLoadingUserDetails(true);
+
+      if (viewType === 'reactions') {
+        // Load reactions with user info
+        const { data: reactions, error: reactionsError } = await supabase
+          .from('story_reactions')
+          .select(`
+            reaction_type,
+            created_at,
+            users!user_id(name)
+          `)
+          .eq('story_id', story.id);
+
+        if (reactionsError) throw reactionsError;
+        setUserReactions(reactions || []);
+        setReactionsModalVisible(true);
+      } else if (viewType === 'ratings') {
+        // Load ratings with user info
+        const { data: ratings, error: ratingsError } = await supabase
+          .from('story_ratings')
+          .select(`
+            rating,
+            created_at,
+            users!user_id(name)
+          `)
+          .eq('story_id', story.id);
+
+        if (ratingsError) throw ratingsError;
+        setUserRatings(ratings || []);
+        setRatingsModalVisible(true);
+      }
+    } catch (error) {
+      console.error('Error loading user details:', error);
+      Alert.alert('Error', 'Failed to load user details');
+    } finally {
+      setLoadingUserDetails(false);
+    }
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -841,9 +1136,9 @@ export default function StoryReviewScreen() {
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <IconSymbol name="chevron.left" size={24} color="#C4A574" />
-          <Text style={styles.backText}>Stories</Text>
+        <TouchableOpacity style={styles.storiesButton} onPress={() => router.back()}>
+          <IconSymbol name="chevron.left" size={20} color="#FFFFFF" />
+          <Text style={styles.storiesButtonText}>Stories</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>
           Review: {story.title}
@@ -882,6 +1177,103 @@ export default function StoryReviewScreen() {
               Submitted: {story.submitted_at ? new Date(story.submitted_at).toLocaleDateString() : 'N/A'}
             </Text>
           </View>
+          <View style={styles.ratingContainer}>
+            <View style={styles.ratingStars}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <IconSymbol
+                  key={star}
+                  name={star <= Math.floor(story.average_rating) ? "star.fill" : star <= story.average_rating ? "star.leadinghalf.filled" : "star"}
+                  size={16}
+                  color="#FFD700"
+                />
+              ))}
+            </View>
+            <Text style={styles.ratingText}>
+              {story.average_rating > 0 ? `${story.average_rating.toFixed(1)} (${story.total_ratings} ratings)` : 'No ratings yet'}
+            </Text>
+          </View>
+        </View>
+
+        {/* Your Interactions */}
+        <View style={styles.adminInteractions}>
+          <Text style={styles.interactionsTitle}>Your Interactions:</Text>
+
+          {/* Reaction Buttons */}
+          <View style={styles.reactionButtons}>
+            <TouchableOpacity
+              style={[
+                styles.reactionButton,
+                styles.likeButton,
+                story.user_reaction === 'like' && styles.reactionButtonActive
+              ]}
+              onPress={() => handleAdminReaction('like')}
+            >
+              <Text style={{ fontSize: 16, marginRight: 4 }}>👍</Text>
+              <Text style={[
+                styles.reactionText,
+                story.user_reaction === 'like' && styles.reactionTextActive
+              ]}>
+                {story.likes || 0}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.reactionButton,
+                styles.dislikeButton,
+                story.user_reaction === 'dislike' && styles.reactionButtonActive
+              ]}
+              onPress={() => handleAdminReaction('dislike')}
+            >
+              <Text style={{ fontSize: 16, marginRight: 4 }}>👎</Text>
+              <Text style={[
+                styles.reactionText,
+                story.user_reaction === 'dislike' && styles.reactionTextActive
+              ]}>
+                {story.dislikes || 0}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Rating Buttons */}
+          <View style={styles.ratingSection}>
+            <Text style={styles.ratingLabel}>Your Rating:</Text>
+            <View style={styles.adminRatingButtons}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <TouchableOpacity
+                  key={star}
+                  onPress={() => handleAdminRating(star)}
+                  style={styles.ratingButton}
+                >
+                  <IconSymbol
+                    name={story.user_rating && story.user_rating >= star ? "star.fill" : "star"}
+                    size={20}
+                    color={story.user_rating && story.user_rating >= star ? "#FFD700" : "#8E8E93"}
+                  />
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          {/* View Reactions and Ratings Links */}
+          <View style={styles.viewLinksContainer}>
+            {(story.likes || 0) > 0 || (story.dislikes || 0) > 0 ? (
+              <TouchableOpacity
+                style={styles.viewLink}
+                onPress={() => loadUserDetails('reactions')}>
+                <Text style={styles.viewLinkText}>
+                  View {(story.likes || 0) + (story.dislikes || 0)} reaction{(story.likes || 0) + (story.dislikes || 0) !== 1 ? 's' : ''}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {(story.total_ratings || 0) > 0 ? (
+              <TouchableOpacity
+                style={styles.viewLink}
+                onPress={() => loadUserDetails('ratings')}>
+                <Text style={styles.viewLinkText}>View all ratings</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
 
         {/* Action Buttons */}
@@ -911,9 +1303,24 @@ export default function StoryReviewScreen() {
               {story.story_parts.map((part) => (
               <View key={part.id} style={styles.partCard}>
                 <View style={styles.partHeader}>
-                  <Text style={styles.partContent} numberOfLines={3}>
-                    {part.content}
-                  </Text>
+                  <View style={styles.partContentContainer}>
+                    <Text
+                      style={styles.partContent}
+                      numberOfLines={expandedParts.has(part.id) ? undefined : 3}
+                    >
+                      {part.content}
+                    </Text>
+                    {part.content.length > 150 && (
+                      <TouchableOpacity
+                        style={styles.viewMoreButton}
+                        onPress={() => togglePartExpansion(part.id)}
+                      >
+                        <Text style={styles.viewMoreText}>
+                          {expandedParts.has(part.id) ? 'View Less' : 'View More'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
                   <View style={styles.partBadges}>
                     {part.is_start && <Text style={styles.badge}>Start</Text>}
                     {part.is_ending && <Text style={styles.badge}>End</Text>}
@@ -961,7 +1368,24 @@ export default function StoryReviewScreen() {
                     part.choices.map((choice) => (
                       <View key={choice.id} style={styles.choiceItem}>
                         <View style={styles.choiceContent}>
-                          <Text style={styles.choiceText}>{choice.choice_text}</Text>
+                          <View style={styles.choiceTextContainer}>
+                            <Text
+                              style={styles.choiceText}
+                              numberOfLines={expandedChoices.has(choice.id) ? undefined : 2}
+                            >
+                              {choice.choice_text}
+                            </Text>
+                            {choice.choice_text.length > 100 && (
+                              <TouchableOpacity
+                                style={styles.viewMoreButtonSmall}
+                                onPress={() => toggleChoiceExpansion(choice.id)}
+                              >
+                                <Text style={styles.viewMoreTextSmall}>
+                                  {expandedChoices.has(choice.id) ? 'Less' : 'More'}
+                                </Text>
+                              </TouchableOpacity>
+                            )}
+                          </View>
                           <Text style={styles.choiceLink}>
                             → {getPartDisplayName(choice.next_part_id)}
                           </Text>
@@ -994,7 +1418,7 @@ export default function StoryReviewScreen() {
               <Text style={styles.noPartsText}>No story parts found. This story needs an initial part to begin.</Text>
               <TouchableOpacity
                 style={styles.addFirstPartButton}
-                onPress={addFirstPart}
+                onPress={openAddPartModal}
               >
                 <IconSymbol name="plus" size={16} color="#FFFFFF" />
                 <Text style={styles.addFirstPartButtonText}>Add First Story Part</Text>
@@ -1033,7 +1457,10 @@ export default function StoryReviewScreen() {
         visible={choiceModalVisible}
         transparent={true}
         animationType="slide"
-        onRequestClose={() => setChoiceModalVisible(false)}
+        onRequestClose={() => {
+          setChoiceModalVisible(false);
+          setAddingChoice(false);
+        }}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -1080,15 +1507,23 @@ export default function StoryReviewScreen() {
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setChoiceModalVisible(false)}
+                onPress={() => {
+                  setChoiceModalVisible(false);
+                  setAddingChoice(false);
+                }}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalButton, styles.saveButton]}
+                style={[styles.modalButton, styles.saveButton, addingChoice && styles.disabledButton]}
                 onPress={handleAddChoice}
+                disabled={addingChoice}
               >
-                <Text style={styles.saveButtonText}>Add Choice</Text>
+                {addingChoice ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.saveButtonText}>Add Choice</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -1210,6 +1645,249 @@ export default function StoryReviewScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Reactions List Modal */}
+      <Modal visible={reactionsModalVisible} transparent animationType="fade">
+        <Pressable style={styles.modalOverlay} onPress={() => setReactionsModalVisible(false)}>
+          <Pressable style={styles.listModalContent} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>Reactions</Text>
+            <ScrollView style={styles.reactionsList}>
+              {loadingUserDetails ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="small" color="#C4A574" />
+                  <Text style={styles.loadingText}>Loading reactions...</Text>
+                </View>
+              ) : (
+                <View style={styles.reactionSummary}>
+                  {userReactions.length === 0 ? (
+                    <Text style={styles.noDataText}>No reactions yet</Text>
+                  ) : (
+                    userReactions.map((reaction, index) => (
+                      <View key={index} style={styles.summaryItem}>
+                        <Text style={styles.summaryEmoji}>
+                          {reaction.reaction_type === 'like' ? '👍' : '👎'}
+                        </Text>
+                        <View style={styles.userInfoContainer}>
+                          <Text style={styles.modalSummaryText}>{reaction.users?.name || 'Anonymous'}</Text>
+                          <Text style={styles.timestampText}>
+                            {new Date(reaction.created_at).toLocaleDateString()}
+                          </Text>
+                        </View>
+                      </View>
+                    ))
+                  )}
+                </View>
+              )}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setReactionsModalVisible(false)}>
+              <Text style={styles.closeButtonText}>Close</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Ratings List Modal */}
+      <Modal visible={ratingsModalVisible} transparent animationType="fade">
+        <Pressable style={styles.modalOverlay} onPress={() => setRatingsModalVisible(false)}>
+          <Pressable style={styles.listModalContent} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>Ratings</Text>
+            <ScrollView style={styles.reactionsList}>
+              {loadingUserDetails ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="small" color="#C4A574" />
+                  <Text style={styles.loadingText}>Loading ratings...</Text>
+                </View>
+              ) : (
+                <View style={styles.ratingSummary}>
+                  {userRatings.length === 0 ? (
+                    <Text style={styles.noDataText}>No ratings yet</Text>
+                  ) : (
+                    userRatings.map((rating, index) => (
+                      <View key={index} style={styles.summaryItem}>
+                        <View style={styles.starsContainer}>
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <Text key={star} style={[styles.starIcon, star <= rating.rating && styles.starFilled]}>
+                              ★
+                            </Text>
+                          ))}
+                        </View>
+                        <View style={styles.userInfoContainer}>
+                          <Text style={styles.modalSummaryText}>{rating.users?.name || 'Anonymous'}</Text>
+                          <Text style={styles.timestampText}>
+                            {new Date(rating.created_at).toLocaleDateString()}
+                          </Text>
+                        </View>
+                      </View>
+                    ))
+                  )}
+                </View>
+              )}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setRatingsModalVisible(false)}>
+              <Text style={styles.closeButtonText}>Close</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Edit Part Modal */}
+      <Modal
+        visible={editPartModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setEditPartModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Edit Story Part</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Content *</Text>
+              <TextInput
+                style={[styles.modalTextInput, { height: 120, textAlignVertical: 'top' }]}
+                value={editPartContent}
+                onChangeText={setEditPartContent}
+                placeholder="Enter the scene content..."
+                placeholderTextColor="#8E8E93"
+                multiline={true}
+                numberOfLines={6}
+              />
+            </View>
+
+            <View style={styles.checkboxContainer}>
+              <TouchableOpacity
+                style={styles.checkbox}
+                onPress={() => setEditPartIsStarting(!editPartIsStarting)}
+              >
+                {editPartIsStarting && <Text style={{ fontSize: 16, color: '#C4A574' }}>✓</Text>}
+              </TouchableOpacity>
+              <Text style={styles.checkboxLabel}>
+                Mark as Starting Scene
+              </Text>
+            </View>
+
+            <View style={styles.checkboxContainer}>
+              <TouchableOpacity
+                style={styles.checkbox}
+                onPress={() => setEditPartIsEnding(!editPartIsEnding)}
+              >
+                {editPartIsEnding && <Text style={{ fontSize: 16, color: '#C4A574' }}>✓</Text>}
+              </TouchableOpacity>
+              <Text style={styles.checkboxLabel}>
+                Mark as Ending Scene
+              </Text>
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => {
+                  setEditPartModalVisible(false);
+                  setEditPartContent('');
+                  setEditPartIsStarting(false);
+                  setEditPartIsEnding(false);
+                  setEditingPart(null);
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.saveButton, savingPartEdit && styles.disabledButton]}
+                onPress={handleSavePartEdit}
+                disabled={savingPartEdit}
+              >
+                {savingPartEdit ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.saveButtonText}>Update Part</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Edit Choice Modal */}
+      <Modal
+        visible={editChoiceModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setEditChoiceModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Edit Choice</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Choice Text *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={editChoiceText}
+                onChangeText={setEditChoiceText}
+                placeholder="Enter the choice text..."
+                placeholderTextColor="#8E8E93"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Links to Part</Text>
+              <ScrollView style={styles.partsList} showsVerticalScrollIndicator={false}>
+                <TouchableOpacity
+                  style={[styles.partOption, editChoiceNextPartId === null && styles.selectedPartOption]}
+                  onPress={() => setEditChoiceNextPartId(null)}
+                >
+                  <Text style={[styles.partOptionText, editChoiceNextPartId === null && styles.selectedPartOptionText]}>
+                    End Story
+                  </Text>
+                </TouchableOpacity>
+                {story?.story_parts?.filter(part => part.id !== editingChoice?.part_id).map((part) => (
+                  <TouchableOpacity
+                    key={part.id}
+                    style={[styles.partOption, editChoiceNextPartId === part.id && styles.selectedPartOption]}
+                    onPress={() => setEditChoiceNextPartId(part.id)}
+                  >
+                    <Text style={[styles.partOptionText, editChoiceNextPartId === part.id && styles.selectedPartOptionText]}>
+                      {part.is_start && '🏁 '}
+                      {part.is_ending && '🏆 '}
+                      {part.content.substring(0, 50)}{part.content.length > 50 ? '...' : ''}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => {
+                  setEditChoiceModalVisible(false);
+                  setEditChoiceText('');
+                  setEditChoiceNextPartId(null);
+                  setEditingChoice(null);
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.saveButton, savingChoiceEdit && styles.disabledButton]}
+                onPress={handleSaveChoiceEdit}
+                disabled={savingChoiceEdit}
+              >
+                {savingChoiceEdit ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.saveButtonText}>Update Choice</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -1256,6 +1934,20 @@ const styles = StyleSheet.create({
   backText: {
     color: '#C4A574',
     fontSize: 14,
+  },
+  storiesButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#2C2C2E',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    gap: 6,
+  },
+  storiesButtonText: {
+    color: '#E8D5B7',
+    fontSize: 14,
+    fontWeight: '600',
   },
   headerTitle: {
     flex: 1,
@@ -1310,6 +2002,20 @@ const styles = StyleSheet.create({
   metaText: {
     fontSize: 12,
     color: '#8E8E93',
+  },
+  ratingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  ratingStars: {
+    flexDirection: 'row',
+    marginRight: 8,
+  },
+  ratingText: {
+    fontSize: 14,
+    color: '#E8D5B7',
+    fontWeight: '500',
   },
   actions: {
     flexDirection: 'row',
@@ -1373,6 +2079,18 @@ const styles = StyleSheet.create({
     color: '#E8D5B7',
     lineHeight: 20,
   },
+  partContentContainer: {
+    flex: 1,
+  },
+  viewMoreButton: {
+    marginTop: 4,
+    alignSelf: 'flex-start',
+  },
+  viewMoreText: {
+    fontSize: 12,
+    color: '#C4A574',
+    fontWeight: '600',
+  },
   partBadges: {
     flexDirection: 'row',
     gap: 6,
@@ -1426,6 +2144,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#E8D5B7',
     flex: 1,
+  },
+  choiceTextContainer: {
+    flex: 1,
+  },
+  viewMoreButtonSmall: {
+    marginTop: 2,
+    alignSelf: 'flex-start',
+  },
+  viewMoreTextSmall: {
+    fontSize: 11,
+    color: '#C4A574',
+    fontWeight: '600',
   },
   choiceActions: {
     flexDirection: 'row',
@@ -1658,5 +2388,182 @@ const styles = StyleSheet.create({
   },
   partActionButtonTextActive: {
     color: '#FFFFFF',
+  },
+
+  // Admin Interactions Styles
+  adminInteractions: {
+    marginTop: 16,
+    marginBottom: 20,
+    padding: 16,
+    backgroundColor: '#2C2C2E',
+    borderRadius: 8,
+  },
+  interactionsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#E8D5B7',
+    marginBottom: 12,
+  },
+  reactionButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  reactionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+    backgroundColor: '#2C2C2E',
+    gap: 4,
+  },
+  likeButton: {
+    borderColor: '#4CAF50',
+  },
+  dislikeButton: {
+    borderColor: '#F44336',
+  },
+  reactionButtonActive: {
+    backgroundColor: '#C4A574',
+    borderColor: '#C4A574',
+  },
+  reactionText: {
+    fontSize: 14,
+    color: '#8E8E93',
+    fontWeight: '500',
+  },
+  reactionTextActive: {
+    color: '#FFFFFF',
+  },
+  ratingSection: {
+    gap: 8,
+  },
+  ratingLabel: {
+    fontSize: 14,
+    color: '#C4A574',
+    fontWeight: '500',
+  },
+  adminRatingButtons: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  ratingButton: {
+    padding: 4,
+  },
+  viewLinksContainer: {
+    flexDirection: 'row',
+    gap: 16,
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#2C2C2E',
+  },
+  viewLink: {
+    flex: 1,
+  },
+  viewLinkText: {
+    fontSize: 13,
+    color: '#C4A574',
+    textAlign: 'center',
+  },
+
+  // Modal styles for reactions and ratings
+  listModalContent: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 20,
+    padding: 20,
+    width: '100%',
+    maxWidth: 350,
+    maxHeight: '70%',
+  },
+  reactionsList: {
+    maxHeight: 300,
+  },
+  reactionSummary: {
+    padding: 10,
+  },
+  ratingSummary: {
+    padding: 10,
+  },
+  summaryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#2C2C2E',
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  summaryEmoji: {
+    fontSize: 20,
+    marginRight: 12,
+  },
+  modalSummaryText: {
+    fontSize: 16,
+    color: '#FFFFFF',
+    flex: 1,
+  },
+  timestampText: {
+    fontSize: 12,
+    color: '#8E8E93',
+    marginTop: 2,
+  },
+  starsContainer: {
+    flexDirection: 'row',
+    marginRight: 12,
+  },
+  starIcon: {
+    fontSize: 16,
+    color: '#3A3A3C',
+  },
+  starFilled: {
+    color: '#FFD60A',
+  },
+  closeButton: {
+    backgroundColor: '#3A3A3C',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  closeButtonText: {
+    fontSize: 16,
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+
+  // Checkbox styles for edit modals
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderWidth: 2,
+    borderColor: '#C4A574',
+    borderRadius: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+    backgroundColor: 'transparent',
+  },
+  checkboxLabel: {
+    fontSize: 16,
+    color: '#E8D5B7',
+  },
+  noDataText: {
+    fontSize: 14,
+    color: '#8E8E93',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    padding: 20,
+  },
+  userInfoContainer: {
+    flex: 1,
   },
 });

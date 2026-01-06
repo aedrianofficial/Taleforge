@@ -89,7 +89,7 @@ export default function AdminTabsLayout() {
         options={{
           title: 'Users',
           tabBarIcon: ({ color, focused }) => (
-            <IconSymbol size={focused ? 24 : 22} name="person.2.fill" color={color} />
+            <IconSymbol size={focused ? 24 : 22} name="person.3" color={color} />
           ),
         }}
       />

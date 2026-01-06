@@ -26,7 +26,7 @@ const REACTION_COOLDOWN = 1500; // 1.5 seconds
 
 type FilterOption = 'newest' | 'highest_rated' | 'most_reacted';
 
-type ReactionType = 'like' | 'heart' | 'laugh';
+type ReactionType = 'like' | 'heart' | 'laugh' | 'sad' | 'dislike';
 
 type PostReaction = {
   id: string;
@@ -63,6 +63,8 @@ const REACTION_EMOJIS: Record<ReactionType, string> = {
   like: '👍',
   heart: '❤️',
   laugh: '😂',
+  sad: '😢',
+  dislike: '👎',
 };
 
 export default function AdminBoardScreen() {
@@ -479,7 +481,7 @@ export default function AdminBoardScreen() {
   };
 
   const getReactionCounts = (post: Post) => {
-    const counts: Record<ReactionType, number> = { like: 0, heart: 0, laugh: 0 };
+    const counts: Record<ReactionType, number> = { like: 0, heart: 0, laugh: 0, sad: 0, dislike: 0 };
     post.post_reactions?.forEach(r => {
       counts[r.reaction_type]++;
     });

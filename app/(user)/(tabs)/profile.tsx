@@ -4,38 +4,25 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Image,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+    ActivityIndicator,
+    Alert,
+    Animated,
+    Image,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Switch,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from 'react-native';
 
-type UserStats = {
-  totalPosts: number;
-  totalReactions: number;
-  totalRatings: number;
-  averageRating: number;
-};
 
 export default function ProfileScreen() {
   const { profile, signOut, updateProfile, refreshProfile } = useAuth();
-  const [stats, setStats] = useState<UserStats>({
-    totalPosts: 0,
-    totalReactions: 0,
-    totalRatings: 0,
-    averageRating: 0,
-  });
-  const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   
   // Settings state
@@ -77,66 +64,9 @@ export default function ProfileScreen() {
       setNotificationsEnabled(profile.notifications_enabled ?? true);
       setPostsVisible(profile.privacy_posts_visible ?? true);
       setNewName(profile.name || '');
-      fetchUserStats();
     }
   }, [profile]);
 
-  const fetchUserStats = async () => {
-    if (!profile?.id) return;
-
-    try {
-      // Get user's posts count
-      const { count: postsCount } = await supabase
-        .from('posts')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', profile.id);
-
-      // Get reactions received on user's posts
-      const { data: userPosts } = await supabase
-        .from('posts')
-        .select('id')
-        .eq('user_id', profile.id);
-
-      let totalReactions = 0;
-      let totalRatings = 0;
-      let avgRating = 0;
-
-      if (userPosts && userPosts.length > 0) {
-        const postIds = userPosts.map(p => p.id);
-
-        // Get reactions count
-        const { count: reactionsCount } = await supabase
-          .from('post_reactions')
-          .select('*', { count: 'exact', head: true })
-          .in('post_id', postIds);
-
-        totalReactions = reactionsCount || 0;
-
-        // Get ratings
-        const { data: ratingsData } = await supabase
-          .from('post_ratings')
-          .select('rating')
-          .in('post_id', postIds);
-
-        if (ratingsData && ratingsData.length > 0) {
-          totalRatings = ratingsData.length;
-          const sum = ratingsData.reduce((acc, r) => acc + r.rating, 0);
-          avgRating = sum / ratingsData.length;
-        }
-      }
-
-      setStats({
-        totalPosts: postsCount || 0,
-        totalReactions,
-        totalRatings,
-        averageRating: avgRating,
-      });
-    } catch (error) {
-      console.error('Error fetching stats:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -636,21 +566,6 @@ export default function ProfileScreen() {
         <Text style={styles.userEmail}>{profile?.email || 'Anonymous user'}</Text>
       </View>
 
-      {/* Stats Cards */}
-      <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{stats.totalPosts}</Text>
-          <Text style={styles.statLabel}>Posts</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{stats.totalReactions}</Text>
-          <Text style={styles.statLabel}>Reactions</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{stats.averageRating > 0 ? stats.averageRating.toFixed(1) : '0'}</Text>
-          <Text style={styles.statLabel}>Avg Rating</Text>
-        </View>
-      </View>
 
       {/* Account Section */}
       <View style={styles.section}>
@@ -803,36 +718,6 @@ const styles = StyleSheet.create({
   },
   userEmail: {
     fontSize: 16,
-    color: '#8E8E93',
-    marginTop: 4,
-  },
-  statsContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    gap: 12,
-    marginBottom: 24,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#1C1C1E',
-    borderRadius: 16,
-    padding: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  statNumber: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#C4A574',
-  },
-  statLabel: {
-    fontSize: 12,
     color: '#8E8E93',
     marginTop: 4,
   },

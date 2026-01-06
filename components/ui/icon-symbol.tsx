@@ -22,6 +22,7 @@ const MAPPING: IconMapping = {
   // Tab bar icons for User
   'square.grid.2x2.fill': 'dashboard',
   'person.fill': 'person',
+  'book.fill': 'library-books',
   
   // Tab bar icons for Admin
   'chart.bar.fill': 'bar-chart',
@@ -29,6 +30,7 @@ const MAPPING: IconMapping = {
   
   // Additional common icons
   'gearshape.fill': 'settings',
+  'person.3': 'group',
   'bell.fill': 'notifications',
   'magnifyingglass': 'search',
   'plus': 'add',
@@ -37,6 +39,7 @@ const MAPPING: IconMapping = {
   'pencil': 'edit',
   'heart.fill': 'favorite',
   'star.fill': 'star',
+  'star': 'star-outline',
   'message.fill': 'message',
   'photo.fill': 'photo',
   'camera.fill': 'camera-alt',

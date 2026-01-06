@@ -4,20 +4,28 @@ import { useAuth } from '@/src/context/AuthContext';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+interface StoryChoice {
+  id: string;
+  choice_text: string;
+  next_part_id: string | null;
+  order_index: number;
+}
 
 interface StoryPart {
   id: string;
@@ -28,6 +36,7 @@ interface StoryPart {
   created_by?: string;
   modified_by?: string;
   modified_at?: string;
+  choices?: StoryChoice[];
 }
 
 interface Story {
@@ -40,7 +49,7 @@ interface Story {
   story_parts?: StoryPart[];
 }
 
-export default function StoryPartsScreen() {
+export default function AdminStoryPartsScreen() {
   const { user, profile } = useAuth();
   const router = useRouter();
   const { storyId } = useLocalSearchParams();
@@ -56,21 +65,30 @@ export default function StoryPartsScreen() {
   const [editingPart, setEditingPart] = useState<StoryPart | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Choice management state
+  const [addChoiceModalVisible, setAddChoiceModalVisible] = useState(false);
+  const [selectedPartForChoice, setSelectedPartForChoice] = useState<StoryPart | null>(null);
+  const [editingChoice, setEditingChoice] = useState<StoryChoice | null>(null);
+  const [choiceText, setChoiceText] = useState('');
+  const [nextPartId, setNextPartId] = useState<string | null>(null);
+
+  // Choice expansion state for View More/Less functionality
+  const [expandedChoices, setExpandedChoices] = useState<Set<string>>(new Set());
+
   const loadStory = useCallback(async () => {
     if (!storyId || !user?.id) return;
 
     try {
       setLoading(true);
 
-      // Load story with parts
+      // Load story with parts and choices - allow admin to access any story
       const { data: storyData, error: storyError } = await supabase
         .from('stories')
         .select(`
           *,
-          story_parts(*, created_by, modified_by, modified_at)
+          story_parts(*, created_by, modified_by, modified_at, choices:story_choices!story_choices_part_id_fkey(*))
         `)
         .eq('id', storyId)
-        .eq('author_id', user.id)
         .single();
 
       if (storyError) throw storyError;
@@ -154,97 +172,125 @@ export default function StoryPartsScreen() {
 
     // Multiple ending scenes are allowed for branching story endings
 
+    // Store current modal state for optimistic updates
+    const currentContent = partContent.trim();
+    const currentIsStarting = isStartingScene;
+    const currentIsEnding = isEndingScene;
+
     try {
       setSaving(true);
 
       const partData = {
-        content: partContent.trim(),
-        is_start: isStartingScene,
-        is_ending: isEndingScene,
+        content: currentContent,
+        is_start: currentIsStarting,
+        is_ending: currentIsEnding,
         modified_by: user?.id,
         modified_at: new Date().toISOString(),
       };
 
+      let newPart;
+
       if (editingPart) {
         // Update existing part
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('story_parts')
           .update(partData)
-          .eq('id', editingPart.id);
+          .eq('id', editingPart.id)
+          .select()
+          .single();
 
         if (error) throw error;
+
+        newPart = data;
         Alert.alert('Success', 'Story part updated successfully');
       } else {
         // Create new part
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('story_parts')
           .insert({
             story_id: story.id,
             ...partData,
             created_by: user?.id,
-          });
+          })
+          .select()
+          .single();
 
         if (error) throw error;
+
+        newPart = data;
         Alert.alert('Success', 'Story part added successfully');
       }
 
+      // Close modal first to prevent flickering
       setAddPartModalVisible(false);
-      setPartContent('');
-      setIsStartingScene(false);
-      setIsEndingScene(false);
-      setEditingPart(null);
-      loadStory(); // Reload to show the updated part
+
+      // Use setTimeout to allow modal animation to complete before updating state
+      // This prevents layout conflicts that can affect scroll indicator calculation
+      setTimeout(() => {
+        // Update local state after modal has fully closed
+        setStory(prev => {
+          if (!prev) return prev;
+
+          if (editingPart) {
+            // Update existing part
+            return {
+              ...prev,
+              story_parts: prev.story_parts?.map(part =>
+                part.id === editingPart.id ? { ...part, ...newPart } : part
+              ) || []
+            };
+          } else {
+            // Add new part
+            return {
+              ...prev,
+              story_parts: [...(prev.story_parts || []), newPart]
+            };
+          }
+        });
+
+        // Reset form state
+        setPartContent('');
+        setIsStartingScene(false);
+        setIsEndingScene(false);
+        setEditingPart(null);
+      }, 350); // Slightly longer delay to ensure smooth transitions
+
     } catch (error) {
       console.error('Error saving part:', error);
       Alert.alert('Error', `Failed to ${editingPart ? 'update' : 'save'} story part`);
+
+      // If there's an error, reload the data to ensure consistency
+      loadStory();
     } finally {
       setSaving(false);
     }
   };
 
-  const canSubmitForReview = () => {
-    if (!story?.story_parts || story.story_parts.length === 0) return false;
-    return story.story_parts.some(part => part.is_start);
+  const toggleChoiceExpansion = (choiceId: string) => {
+    const newExpanded = new Set(expandedChoices);
+    if (newExpanded.has(choiceId)) {
+      newExpanded.delete(choiceId);
+    } else {
+      newExpanded.add(choiceId);
+    }
+    setExpandedChoices(newExpanded);
   };
 
-  const handleSubmitForReview = async () => {
-    if (!story) return;
+  const getPartDisplayName = (partId: string | null) => {
+    if (!partId || !story?.story_parts) return 'End Story';
+    const part = story.story_parts.find(p => p.id === partId);
+    return part ? `"${part.content.substring(0, 30)}${part.content.length > 30 ? '...' : ''}"` : 'End Story';
+  };
 
-    if (!canSubmitForReview()) {
-      Alert.alert('Cannot Submit', 'You must have at least one story part marked as the starting scene before submitting for review.');
-      return;
-    }
-
-    try {
-      const { error } = await supabase
-        .from('stories')
-        .update({
-          submitted_at: new Date().toISOString()
-        })
-        .eq('id', story.id);
-
-      if (error) throw error;
-
-      Alert.alert(
-        'Submitted for Review',
-        'Your story has been submitted for admin review. You will be notified once it\'s published.',
-        [
-          {
-            text: 'Back to Stories',
-            onPress: () => router.replace(profile?.is_admin ? '../../../(admin)/(tabs)/story-management' : '../(tabs)/stories' as any)
-          }
-        ]
-      );
-    } catch (error) {
-      console.error('Error submitting for review:', error);
-      Alert.alert('Error', 'Failed to submit for review');
-    }
+  const canPublishStory = () => {
+    if (!story?.story_parts || story.story_parts.length === 0) return false;
+    return story.story_parts.some(part => part.is_start);
   };
 
   const handlePublishStory = async () => {
     if (!story) return;
 
-    if (!canSubmitForReview()) {
+    if (!canPublishStory()) {
       Alert.alert('Cannot Publish', 'You must have at least one story part marked as the starting scene before publishing.');
       return;
     }
@@ -268,13 +314,143 @@ export default function StoryPartsScreen() {
         [
           {
             text: 'Back to Management',
-            onPress: () => router.replace('../../../(admin)/(tabs)/story-management' as any)
+            onPress: () => router.replace('../../(tabs)/story-management' as any)
           }
         ]
       );
     } catch (error) {
       console.error('Error publishing story:', error);
       Alert.alert('Error', 'Failed to publish story');
+    }
+  };
+
+  const handleSubmitForReview = async () => {
+    if (!story) return;
+
+    if (!canPublishStory()) {
+      Alert.alert('Cannot Submit', 'You must have at least one story part marked as the starting scene before submitting for review.');
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('stories')
+        .update({
+          submitted_at: new Date().toISOString()
+        })
+        .eq('id', story.id);
+
+      if (error) throw error;
+
+      Alert.alert(
+        'Submitted for Review',
+        'Your story has been submitted for admin review. You will be notified once it\'s published.',
+        [
+          {
+            text: 'Back to Management',
+            onPress: () => router.replace('../../(tabs)/story-management' as any)
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error submitting for review:', error);
+      Alert.alert('Error', 'Failed to submit for review');
+    }
+  };
+
+  const handleAddChoice = (part: StoryPart) => {
+    setSelectedPartForChoice(part);
+    setChoiceText('');
+    setNextPartId(null);
+    setEditingChoice(null);
+    setAddChoiceModalVisible(true);
+  };
+
+  const handleEditChoice = (part: StoryPart, choice: StoryChoice) => {
+    setSelectedPartForChoice(part);
+    setChoiceText(choice.choice_text);
+    setNextPartId(choice.next_part_id);
+    setEditingChoice(choice);
+    setAddChoiceModalVisible(true);
+  };
+
+  const handleDeleteChoice = (choice: StoryChoice) => {
+    Alert.alert(
+      'Delete Choice',
+      'Are you sure you want to delete this choice?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { error } = await supabase
+                .from('story_choices')
+                .delete()
+                .eq('id', choice.id);
+
+              if (error) throw error;
+
+              await loadStory();
+              Alert.alert('Success', 'Choice deleted successfully');
+            } catch (error) {
+              console.error('Error deleting choice:', error);
+              Alert.alert('Error', 'Failed to delete choice');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleSaveChoice = async () => {
+    if (!selectedPartForChoice || !choiceText.trim()) {
+      Alert.alert('Error', 'Please enter choice text');
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      const choiceData = {
+        choice_text: choiceText.trim(),
+        next_part_id: nextPartId,
+        order_index: editingChoice ? editingChoice.order_index : (selectedPartForChoice.choices?.length || 0),
+      };
+
+      if (editingChoice) {
+        // Update existing choice
+        const { error } = await supabase
+          .from('story_choices')
+          .update(choiceData)
+          .eq('id', editingChoice.id);
+
+        if (error) throw error;
+        Alert.alert('Success', 'Choice updated successfully');
+      } else {
+        // Create new choice
+        const { error } = await supabase
+          .from('story_choices')
+          .insert({
+            part_id: selectedPartForChoice.id,
+            ...choiceData,
+          });
+
+        if (error) throw error;
+        Alert.alert('Success', 'Choice added successfully');
+      }
+
+      setAddChoiceModalVisible(false);
+      setChoiceText('');
+      setNextPartId(null);
+      setEditingChoice(null);
+      loadStory(); // Reload to show the updated choices
+    } catch (error) {
+      console.error('Error saving choice:', error);
+      Alert.alert('Error', `Failed to ${editingChoice ? 'update' : 'save'} choice`);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -298,7 +474,75 @@ export default function StoryPartsScreen() {
         </View>
       </View>
 
+      {/* Choices Section */}
+      <View style={styles.choicesSection}>
+        <View style={styles.choicesHeader}>
+          <Text style={styles.choicesTitle}>Choices:</Text>
+          <TouchableOpacity
+            style={styles.addChoiceButton}
+            onPress={() => handleAddChoice(item)}
+          >
+            <IconSymbol name="plus" size={16} color="#4CAF50" />
+            <Text style={styles.addChoiceText}>Add Choice</Text>
+          </TouchableOpacity>
+        </View>
+
+        {item.choices && item.choices.length > 0 ? (
+          item.choices
+            .sort((a, b) => a.order_index - b.order_index)
+            .map((choice) => (
+              <View key={choice.id} style={styles.choiceItem}>
+                <View style={styles.choiceContent}>
+                  <View style={styles.choiceTextContainer}>
+                    <Text
+                      style={styles.choiceText}
+                      numberOfLines={expandedChoices.has(choice.id) ? undefined : 2}
+                    >
+                      {choice.choice_text}
+                    </Text>
+                    {choice.choice_text.length > 100 && (
+                      <TouchableOpacity
+                        style={styles.viewMoreButtonSmall}
+                        onPress={() => toggleChoiceExpansion(choice.id)}
+                      >
+                        <Text style={styles.viewMoreTextSmall}>
+                          {expandedChoices.has(choice.id) ? 'Less' : 'More'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <Text style={styles.choiceLink}>
+                    → {getPartDisplayName(choice.next_part_id)}
+                  </Text>
+                </View>
+                <View style={styles.choiceActions}>
+                  <TouchableOpacity
+                    style={styles.editChoiceButton}
+                    onPress={() => handleEditChoice(item, choice)}
+                  >
+                    <IconSymbol name="pencil" size={16} color="#2196F3" />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.deleteChoiceButton}
+                    onPress={() => handleDeleteChoice(choice)}
+                  >
+                    <IconSymbol name="trash.fill" size={16} color="#F44336" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))
+        ) : (
+          <Text style={styles.noChoicesText}>No choices added yet</Text>
+        )}
+      </View>
+
       <View style={styles.partActions}>
+        <TouchableOpacity
+          style={styles.addChoiceButton}
+          onPress={() => handleAddChoice(item)}
+        >
+          <IconSymbol name="plus" size={16} color="#4CAF50" />
+        </TouchableOpacity>
         <TouchableOpacity
           style={styles.editPartButton}
           onPress={() => handleEditPart(item)}
@@ -357,13 +601,7 @@ export default function StoryPartsScreen() {
         <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => {
-            if (profile?.is_admin) {
-              router.replace('../../../(admin)/(tabs)/story-management' as any);
-            } else {
-              router.back();
-            }
-          }}
+          onPress={() => router.replace('../../(tabs)/story-management' as any)}
         >
           <IconSymbol name="chevron.left" size={24} color="#C4A574" />
           <Text style={styles.backText}>Back</Text>
@@ -403,16 +641,24 @@ export default function StoryPartsScreen() {
                 <Text style={styles.addButtonText}>Add Part</Text>
               </TouchableOpacity>
 
-              {canSubmitForReview() && (
-                <TouchableOpacity
-                  style={styles.submitButton}
-                  onPress={profile?.is_admin ? handlePublishStory : handleSubmitForReview}
-                >
-                  <IconSymbol name={profile?.is_admin ? "checkmark" : "paperplane"} size={20} color="#FFFFFF" />
-                  <Text style={styles.submitButtonText}>
-                    {profile?.is_admin ? 'Publish Story' : 'Submit for Review'}
-                  </Text>
-                </TouchableOpacity>
+              {canPublishStory() && (
+                <View style={styles.publishActions}>
+                  <TouchableOpacity
+                    style={styles.publishButton}
+                    onPress={handlePublishStory}
+                  >
+                    <IconSymbol name="checkmark" size={20} color="#FFFFFF" />
+                    <Text style={styles.publishButtonText}>Publish Story</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.submitReviewButton}
+                    onPress={handleSubmitForReview}
+                  >
+                    <IconSymbol name="paperplane" size={20} color="#FFFFFF" />
+                    <Text style={styles.submitReviewButtonText}>Submit to Review</Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
           </>
@@ -479,10 +725,13 @@ export default function StoryPartsScreen() {
                 style={[styles.modalButton, styles.cancelButton]}
                 onPress={() => {
                   setAddPartModalVisible(false);
-                  setPartContent('');
-                  setIsStartingScene(false);
-                  setIsEndingScene(false);
-                  setEditingPart(null);
+                  // Reset form state with a small delay to allow modal animation to complete
+                  setTimeout(() => {
+                    setPartContent('');
+                    setIsStartingScene(false);
+                    setIsEndingScene(false);
+                    setEditingPart(null);
+                  }, 300);
                 }}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
@@ -503,6 +752,92 @@ export default function StoryPartsScreen() {
             </View>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Add Choice Modal */}
+      <Modal
+        visible={addChoiceModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => {
+          setAddChoiceModalVisible(false);
+          setSaving(false);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Add Choice</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Choice Text *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={choiceText}
+                onChangeText={setChoiceText}
+                placeholder="Enter the choice text..."
+                placeholderTextColor="#8E8E93"
+                multiline={true}
+                numberOfLines={3}
+                textAlignVertical="top"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Links to Part</Text>
+              <ScrollView
+                style={styles.modalPartsList}
+                showsVerticalScrollIndicator={false}
+              >
+                <TouchableOpacity
+                  style={[styles.partOption, nextPartId === null && styles.selectedPartOption]}
+                  onPress={() => setNextPartId(null)}
+                >
+                  <Text style={[styles.partOptionText, nextPartId === null && styles.selectedPartOptionText]}>
+                    End Story
+                  </Text>
+                </TouchableOpacity>
+                {story?.story_parts?.filter(part => part.id !== selectedPartForChoice?.id).map((part) => (
+                  <TouchableOpacity
+                    key={part.id}
+                    style={[styles.partOption, nextPartId === part.id && styles.selectedPartOption]}
+                    onPress={() => setNextPartId(part.id)}
+                  >
+                    <Text style={[styles.partOptionText, nextPartId === part.id && styles.selectedPartOptionText]}>
+                      {part.is_start && '🏁 '}
+                      {part.is_ending && '🏆 '}
+                      {part.content.substring(0, 50)}{part.content.length > 50 ? '...' : ''}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => {
+                  setAddChoiceModalVisible(false);
+                  setChoiceText('');
+                  setNextPartId(null);
+                  setEditingChoice(null);
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.saveButton, saving && styles.disabledButton]}
+                onPress={handleSaveChoice}
+                disabled={saving}
+              >
+                {saving ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.saveButtonText}>Add Choice</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -691,20 +1026,125 @@ const styles = StyleSheet.create({
     marginBottom: 40, // Extra margin for mobile navigation
     gap: 12,
   },
-  submitButton: {
+  publishButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#2196F3',
+    backgroundColor: '#4CAF50',
     paddingVertical: 14,
     paddingHorizontal: 24,
     borderRadius: 8,
     justifyContent: 'center',
     gap: 8,
   },
-  submitButtonText: {
+  publishButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  publishActions: {
+    gap: 12,
+  },
+  submitReviewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FF9800',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    justifyContent: 'center',
+    gap: 8,
+  },
+  submitReviewButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  choicesSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#2C2C2E',
+  },
+  choicesTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#C4A574',
+    marginBottom: 8,
+  },
+  choiceItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#2C2C2E',
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 6,
+  },
+  choiceText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#E8D5B7',
+  },
+  choiceContent: {
+    flex: 1,
+  },
+  choiceTextContainer: {
+    flex: 1,
+  },
+  viewMoreButtonSmall: {
+    marginTop: 2,
+    alignSelf: 'flex-start',
+  },
+  viewMoreTextSmall: {
+    fontSize: 11,
+    color: '#C4A574',
+    fontWeight: '600',
+  },
+  choiceLink: {
+    fontSize: 12,
+    color: '#C4A574',
+    fontStyle: 'italic',
+    marginTop: 4,
+  },
+  choiceActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginLeft: 12,
+  },
+  choicesHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  addChoiceButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  addChoiceText: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  editChoiceButton: {
+    backgroundColor: '#2C2C2E',
+    padding: 6,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#2196F3',
+  },
+  deleteChoiceButton: {
+    backgroundColor: '#2C2C2E',
+    padding: 6,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#F44336',
+  },
+  noChoicesText: {
+    fontSize: 14,
+    color: '#8E8E93',
+    fontStyle: 'italic',
   },
   modalOverlay: {
     flex: 1,
@@ -745,6 +1185,15 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     minHeight: 120,
+    textAlignVertical: 'top',
+  },
+  modalTextInput: {
+    backgroundColor: '#2C2C2E',
+    borderRadius: 8,
+    padding: 12,
+    color: '#FFFFFF',
+    fontSize: 16,
+    minHeight: 80,
     textAlignVertical: 'top',
   },
   checkboxContainer: {
@@ -802,5 +1251,28 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     opacity: 0.6,
+  },
+  modalPartsList: {
+    maxHeight: 200,
+  },
+  partOption: {
+    backgroundColor: '#2C2C2E',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 8,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  selectedPartOption: {
+    borderColor: '#C4A574',
+    backgroundColor: '#3C3C3E',
+  },
+  partOptionText: {
+    color: '#E8D5B7',
+    fontSize: 14,
+  },
+  selectedPartOptionText: {
+    color: '#C4A574',
+    fontWeight: '600',
   },
 });

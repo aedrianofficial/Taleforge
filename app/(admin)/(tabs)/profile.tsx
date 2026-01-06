@@ -4,41 +4,24 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Image,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+    ActivityIndicator,
+    Alert,
+    Animated,
+    Image,
+    Modal,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Switch,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from 'react-native';
 
-type AdminStats = {
-  totalPosts: number;
-  totalReactions: number;
-  totalRatings: number;
-  averageRating: number;
-  totalUsers: number;
-  totalAllPosts: number;
-};
 
 export default function AdminProfileScreen() {
   const { profile, signOut, updateProfile, updatePassword, refreshProfile } = useAuth();
-  const [stats, setStats] = useState<AdminStats>({
-    totalPosts: 0,
-    totalReactions: 0,
-    totalRatings: 0,
-    averageRating: 0,
-    totalUsers: 0,
-    totalAllPosts: 0,
-  });
-  const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   
   // Settings state
@@ -100,75 +83,9 @@ export default function AdminProfileScreen() {
       setNotificationsEnabled(profile.notifications_enabled ?? true);
       setPostsVisible(profile.privacy_posts_visible ?? true);
       setNewName(profile.name || '');
-      fetchAdminStats();
     }
   }, [profile]);
 
-  const fetchAdminStats = async () => {
-    if (!profile?.id) return;
-
-    try {
-      // Get admin's posts count
-      const { count: postsCount } = await supabase
-        .from('posts')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', profile.id);
-
-      // Get reactions received on admin's posts
-      const { data: adminPosts } = await supabase
-        .from('posts')
-        .select('id')
-        .eq('user_id', profile.id);
-
-      let totalReactions = 0;
-      let totalRatings = 0;
-      let avgRating = 0;
-
-      if (adminPosts && adminPosts.length > 0) {
-        const postIds = adminPosts.map(p => p.id);
-
-        const { count: reactionsCount } = await supabase
-          .from('post_reactions')
-          .select('*', { count: 'exact', head: true })
-          .in('post_id', postIds);
-
-        totalReactions = reactionsCount || 0;
-
-        const { data: ratingsData } = await supabase
-          .from('post_ratings')
-          .select('rating')
-          .in('post_id', postIds);
-
-        if (ratingsData && ratingsData.length > 0) {
-          totalRatings = ratingsData.length;
-          const sum = ratingsData.reduce((acc, r) => acc + r.rating, 0);
-          avgRating = sum / ratingsData.length;
-        }
-      }
-
-      // Admin-only stats
-      const { count: totalUsers } = await supabase
-        .from('users')
-        .select('*', { count: 'exact', head: true });
-
-      const { count: totalAllPosts } = await supabase
-        .from('posts')
-        .select('*', { count: 'exact', head: true });
-
-      setStats({
-        totalPosts: postsCount || 0,
-        totalReactions,
-        totalRatings,
-        averageRating: avgRating,
-        totalUsers: totalUsers || 0,
-        totalAllPosts: totalAllPosts || 0,
-      });
-    } catch (error) {
-      console.error('Error fetching stats:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -816,43 +733,6 @@ export default function AdminProfileScreen() {
         <Text style={styles.userEmail}>{profile?.email || 'No email'}</Text>
       </View>
 
-      {/* Stats Cards - Admin has extra stats */}
-      <View style={styles.statsContainer}>
-        <View style={styles.statRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.totalPosts}</Text>
-            <Text style={styles.statLabel}>Your Posts</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.totalReactions}</Text>
-            <Text style={styles.statLabel}>Reactions</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.averageRating > 0 ? stats.averageRating.toFixed(1) : '0'}</Text>
-            <Text style={styles.statLabel}>Avg Rating</Text>
-          </View>
-        </View>
-        <View style={styles.adminStatsRow}>
-          <View style={styles.adminStatCard}>
-            <View style={styles.adminStatIcon}>
-              <Text>👥</Text>
-            </View>
-            <View>
-              <Text style={styles.adminStatNumber}>{stats.totalUsers}</Text>
-              <Text style={styles.adminStatLabel}>Total Users</Text>
-            </View>
-          </View>
-          <View style={styles.adminStatCard}>
-            <View style={styles.adminStatIcon}>
-              <Text>📝</Text>
-            </View>
-            <View>
-              <Text style={styles.adminStatNumber}>{stats.totalAllPosts}</Text>
-              <Text style={styles.adminStatLabel}>Total Posts</Text>
-            </View>
-          </View>
-        </View>
-      </View>
 
       {/* Account Section */}
       <View style={styles.section}>
@@ -1031,71 +911,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#8E8E93',
     marginTop: 8,
-  },
-  statsContainer: {
-    paddingHorizontal: 16,
-    marginBottom: 24,
-  },
-  statRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#1C1C1E',
-    borderRadius: 16,
-    padding: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  statNumber: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#5E5CE6',
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#8E8E93',
-    marginTop: 4,
-  },
-  adminStatsRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  adminStatCard: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(94, 92, 230, 0.1)',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(94, 92, 230, 0.2)',
-  },
-  adminStatIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(94, 92, 230, 0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  adminStatNumber: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  adminStatLabel: {
-    fontSize: 12,
-    color: '#8E8E93',
   },
   section: {
     paddingHorizontal: 16,

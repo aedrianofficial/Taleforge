@@ -2,14 +2,14 @@ import { useAuth } from '@/src/context/AuthContext';
 import { Link, useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
-    ActivityIndicator,
-    KeyboardAvoidingView,
-    Platform,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
 export default function LoginScreen() {
@@ -123,13 +123,13 @@ export default function LoginScreen() {
               secureTextEntry
             />
 
-            <View style={styles.forgotPasswordContainer}>
+            {/*<View style={styles.forgotPasswordContainer}>
               <Link href="/(auth)/forgot-password" asChild>
                 <TouchableOpacity>
                   <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
                 </TouchableOpacity>
               </Link>
-            </View>
+            </View>*/}
 
             <TouchableOpacity
               style={styles.primaryButton}

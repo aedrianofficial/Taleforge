@@ -350,7 +350,9 @@ export default function StoryReadingScreen() {
             <Text style={styles.previewBadge}>PREVIEW</Text>
           )}
         </View>
-        <View style={styles.headerRight} />
+        <TouchableOpacity style={styles.storiesButton} onPress={() => router.push('/(user)/(tabs)/stories' as any)}>
+          <Text style={styles.storiesButtonText}>Stories</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Progress Indicator */}
@@ -486,6 +488,17 @@ const styles = StyleSheet.create({
   },
   headerRight: {
     width: 40,
+  },
+  storiesButton: {
+    backgroundColor: '#2C2C2E',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  storiesButtonText: {
+    color: '#E8D5B7',
+    fontSize: 14,
+    fontWeight: '600',
   },
   savingIndicator: {
     flexDirection: 'row',

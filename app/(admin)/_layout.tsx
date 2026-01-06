@@ -48,6 +48,18 @@ export default function AdminLayout() {
           },
         }}
       />
+      <Stack.Screen
+        name="story-create/index"
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="story-parts/[storyId]"
+        options={{
+          headerShown: false,
+        }}
+      />
     </Stack>
   );
 }

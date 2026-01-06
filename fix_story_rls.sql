@@ -72,3 +72,73 @@ with check (
     and s.author_id = auth.uid()
   )
 );
+
+-- Story reactions policies
+create policy "Users can read story reactions"
+on public.story_reactions
+for select
+using (
+  exists (
+    select 1 from public.stories s
+    where s.id = story_reactions.story_id
+    and (s.is_published = true
+         or s.author_id = auth.uid()
+         or exists (
+            select 1 from public.users
+            where users.id = auth.uid()
+            and users.is_admin = true
+         )
+    )
+  )
+);
+
+create policy "Users can create their own story reactions"
+on public.story_reactions
+for insert
+with check ( user_id = auth.uid() );
+
+create policy "Users can update their own story reactions"
+on public.story_reactions
+for update
+using ( user_id = auth.uid() )
+with check ( user_id = auth.uid() );
+
+create policy "Users can delete their own story reactions"
+on public.story_reactions
+for delete
+using ( user_id = auth.uid() );
+
+-- Story ratings policies
+create policy "Users can read story ratings"
+on public.story_ratings
+for select
+using (
+  exists (
+    select 1 from public.stories s
+    where s.id = story_ratings.story_id
+    and (s.is_published = true
+         or s.author_id = auth.uid()
+         or exists (
+            select 1 from public.users
+            where users.id = auth.uid()
+            and users.is_admin = true
+         )
+    )
+  )
+);
+
+create policy "Users can create their own story ratings"
+on public.story_ratings
+for insert
+with check ( user_id = auth.uid() );
+
+create policy "Users can update their own story ratings"
+on public.story_ratings
+for update
+using ( user_id = auth.uid() )
+with check ( user_id = auth.uid() );
+
+create policy "Users can delete their own story ratings"
+on public.story_ratings
+for delete
+using ( user_id = auth.uid() );

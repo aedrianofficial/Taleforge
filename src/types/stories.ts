@@ -65,6 +65,10 @@ export interface StoryReaction {
 export interface StoryWithProgress extends Story {
   progress?: StoryProgress;
   user_rating?: StoryRating;
+  likes?: number;
+  dislikes?: number;
+  user_reaction?: 'like' | 'dislike';
+  story_parts?: any[]; // For admin views that load parts
 }
 
 export interface StoryPartWithChoices extends StoryPart {

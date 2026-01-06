@@ -4,21 +4,21 @@ import { useAuth } from '@/src/context/AuthContext';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-export default function StoryCreateScreen() {
+export default function AdminStoryCreateScreen() {
   const { user } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -29,7 +29,7 @@ export default function StoryCreateScreen() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Navigate to stories list after creation - simplified flow
+  // Navigate to admin story parts page after creation
   const handleSave = async () => {
     if (!title.trim()) {
       Alert.alert('Error', 'Please enter a story title');
@@ -53,7 +53,7 @@ export default function StoryCreateScreen() {
         title: title.trim(),
         description: description.trim() || null,
         author_id: user.id,
-        is_published: false,
+        is_published: false, // Admin can publish later
         genre: tags.trim() || null,
       };
 
@@ -65,11 +65,9 @@ export default function StoryCreateScreen() {
 
       if (error) throw error;
 
-      // Note: Part creation moved to user interface
-      // Users can add parts through the "Add Part" button after story creation
-      console.log('Story created successfully:', data.id, 'user can add parts via UI');
+      console.log('Story created successfully:', data.id);
 
-      // Navigate to story parts management page
+      // Navigate to admin story parts page
       router.replace(`../story-parts/${data.id}` as any);
     } catch (error) {
       console.error('Error creating story:', error);
@@ -112,7 +110,7 @@ export default function StoryCreateScreen() {
         <View style={styles.instructions}>
           <Text style={styles.instructionsTitle}>Create Your Story</Text>
           <Text style={styles.instructionsText}>
-            Fill out the basic information for your story. You can then add story parts, marking one as the starting scene and any number as ending scenes to create branching story paths. An admin will review your story and add interactive choices to make it playable.
+            Fill out the basic information for your story. You can then add story parts, marking one as the starting scene and any number as ending scenes to create branching story paths. As an admin, you can publish stories immediately.
           </Text>
         </View>
 
@@ -132,12 +130,12 @@ export default function StoryCreateScreen() {
 
         {/* Description Input */}
         <View style={styles.inputGroup}>
-          <Text style={styles.label}>Description</Text>
+          <Text style={styles.label}>Description *</Text>
           <TextInput
             style={styles.descriptionInput}
             value={description}
             onChangeText={setDescription}
-            placeholder="Describe your story (optional)"
+            placeholder="Describe your story (required)"
             placeholderTextColor="#8E8E93"
             multiline
             numberOfLines={4}
@@ -166,9 +164,9 @@ export default function StoryCreateScreen() {
         {/* Save Button */}
         <View style={styles.actions}>
           <TouchableOpacity
-            style={[styles.saveButton, (!title.trim() || saving) && styles.saveButtonDisabled]}
+            style={[styles.saveButton, (!title.trim() || !description.trim() || saving) && styles.saveButtonDisabled]}
             onPress={handleSave}
-            disabled={!title.trim() || saving}
+            disabled={!title.trim() || !description.trim() || saving}
           >
             {saving ? (
               <ActivityIndicator size="small" color="#FFFFFF" />

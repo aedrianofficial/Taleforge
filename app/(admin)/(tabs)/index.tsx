@@ -17,6 +17,13 @@ type Stats = {
   averageRating: number;
   activeToday: number;
   postsThisWeek: number;
+  totalStories: number;
+  totalStoryParts: number;
+  totalStoryChoices: number;
+  storyReactions: number;
+  storyAvgRating: number;
+  storiesThisWeek: number;
+  storyCompletions: number;
 };
 
 export default function AdminDashboard() {
@@ -28,6 +35,13 @@ export default function AdminDashboard() {
     averageRating: 0,
     activeToday: 0,
     postsThisWeek: 0,
+    totalStories: 0,
+    totalStoryParts: 0,
+    totalStoryChoices: 0,
+    storyReactions: 0,
+    storyAvgRating: 0,
+    storiesThisWeek: 0,
+    storyCompletions: 0,
   });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -48,6 +62,21 @@ export default function AdminDashboard() {
         fetchDashboardData();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'post_ratings' }, () => {
+        fetchDashboardData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stories' }, () => {
+        fetchDashboardData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'story_parts' }, () => {
+        fetchDashboardData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'story_choices' }, () => {
+        fetchDashboardData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'story_reactions' }, () => {
+        fetchDashboardData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'story_ratings' }, () => {
         fetchDashboardData();
       })
       .subscribe();
@@ -99,9 +128,47 @@ export default function AdminDashboard() {
         .select('user_id')
         .gte('created_at', todayStart.toISOString());
 
-      const uniqueActiveUsers = todayPosts 
-        ? new Set(todayPosts.map(p => p.user_id)).size 
+      const uniqueActiveUsers = todayPosts
+        ? new Set(todayPosts.map(p => p.user_id)).size
         : 0;
+
+      // Story Analytics
+      const { count: storiesCount } = await supabase
+        .from('stories')
+        .select('*', { count: 'exact', head: true });
+
+      const { count: storyPartsCount } = await supabase
+        .from('story_parts')
+        .select('*', { count: 'exact', head: true });
+
+      const { count: storyChoicesCount } = await supabase
+        .from('story_choices')
+        .select('*', { count: 'exact', head: true });
+
+      const { count: storyReactionsCount } = await supabase
+        .from('story_reactions')
+        .select('*', { count: 'exact', head: true });
+
+      const { data: storyRatingsData } = await supabase
+        .from('story_ratings')
+        .select('rating');
+
+      const storyAvgRating = storyRatingsData && storyRatingsData.length > 0
+        ? storyRatingsData.reduce((sum, r) => sum + r.rating, 0) / storyRatingsData.length
+        : 0;
+
+      const { count: weekStoriesCount } = await supabase
+        .from('stories')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', sevenDaysAgo.toISOString());
+
+      // Calculate story completions (stories that have ending parts)
+      const { data: endingParts } = await supabase
+        .from('story_parts')
+        .select('story_id')
+        .eq('is_ending', true);
+
+      const storyCompletions = endingParts ? new Set(endingParts.map(p => p.story_id)).size : 0;
 
       setStats({
         totalUsers: userCount || 0,
@@ -110,6 +177,13 @@ export default function AdminDashboard() {
         averageRating: avgRating,
         activeToday: uniqueActiveUsers,
         postsThisWeek: weekPostCount || 0,
+        totalStories: storiesCount || 0,
+        totalStoryParts: storyPartsCount || 0,
+        totalStoryChoices: storyChoicesCount || 0,
+        storyReactions: storyReactionsCount || 0,
+        storyAvgRating: storyAvgRating,
+        storiesThisWeek: weekStoriesCount || 0,
+        storyCompletions: storyCompletions,
       });
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -208,6 +282,75 @@ export default function AdminDashboard() {
         </View>
       </View>
 
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>🎭 Interactive Stories</Text>
+        <View style={styles.statsGrid}>
+          <View style={[styles.statCard, styles.storyPrimaryCard]}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>📚</Text>
+            </View>
+            <Text style={styles.statNumber}>{stats.totalStories}</Text>
+            <Text style={styles.statLabel}>Total Stories</Text>
+          </View>
+          <View style={[styles.statCard, styles.storySecondaryCard]}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>📄</Text>
+            </View>
+            <Text style={styles.statNumber}>{stats.totalStoryParts}</Text>
+            <Text style={styles.statLabel}>Story Parts</Text>
+          </View>
+          <View style={styles.statCard}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>🔀</Text>
+            </View>
+            <Text style={styles.statNumber}>{stats.totalStoryChoices}</Text>
+            <Text style={styles.statLabel}>Total Choices</Text>
+          </View>
+          <View style={styles.statCard}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>💖</Text>
+            </View>
+            <Text style={styles.statNumber}>{stats.storyReactions}</Text>
+            <Text style={styles.statLabel}>Story Reactions</Text>
+          </View>
+          <View style={[styles.statCard, styles.storyAccentCard]}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>⭐</Text>
+            </View>
+            <Text style={styles.statNumber}>
+              {stats.storyAvgRating > 0 ? stats.storyAvgRating.toFixed(1) : '0.0'}
+            </Text>
+            <Text style={styles.statLabel}>Avg Story Rating</Text>
+          </View>
+          <View style={[styles.statCard, styles.storySuccessCard]}>
+            <View style={styles.statIcon}>
+              <Text style={styles.statIconText}>🎯</Text>
+            </View>
+            <Text style={styles.statNumber}>{stats.storyCompletions}</Text>
+            <Text style={styles.statLabel}>Completions</Text>
+          </View>
+        </View>
+
+        <View style={styles.storyMetricsContainer}>
+          <View style={[styles.storyMetricItem, styles.storyMetricItemBordered]}>
+            <Text style={styles.storyMetricLabel}>Stories This Week:</Text>
+            <Text style={styles.storyMetricValue}>{stats.storiesThisWeek}</Text>
+          </View>
+          <View style={[styles.storyMetricItem, styles.storyMetricItemBordered]}>
+            <Text style={styles.storyMetricLabel}>Parts per Story:</Text>
+            <Text style={styles.storyMetricValue}>
+              {stats.totalStories > 0 ? (stats.totalStoryParts / stats.totalStories).toFixed(1) : '0.0'}
+            </Text>
+          </View>
+          <View style={styles.storyMetricItem}>
+            <Text style={styles.storyMetricLabel}>Choices per Part:</Text>
+            <Text style={styles.storyMetricValue}>
+              {stats.totalStoryParts > 0 ? (stats.totalStoryChoices / stats.totalStoryParts).toFixed(1) : '0.0'}
+            </Text>
+          </View>
+        </View>
+      </View>
+
       <View style={styles.footer}>
         <Text style={styles.footerText}>💡 Real-time updates enabled</Text>
       </View>
@@ -295,6 +438,22 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(100, 210, 255, 0.3)',
     backgroundColor: 'rgba(100, 210, 255, 0.05)',
   },
+  storyPrimaryCard: {
+    borderColor: 'rgba(255, 193, 7, 0.3)',
+    backgroundColor: 'rgba(255, 193, 7, 0.05)',
+  },
+  storySecondaryCard: {
+    borderColor: 'rgba(220, 53, 69, 0.3)',
+    backgroundColor: 'rgba(220, 53, 69, 0.05)',
+  },
+  storyAccentCard: {
+    borderColor: 'rgba(23, 162, 184, 0.3)',
+    backgroundColor: 'rgba(23, 162, 184, 0.05)',
+  },
+  storySuccessCard: {
+    borderColor: 'rgba(40, 167, 69, 0.3)',
+    backgroundColor: 'rgba(40, 167, 69, 0.05)',
+  },
   statIcon: {
     width: 48,
     height: 48,
@@ -317,6 +476,34 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#8E8E93',
     textAlign: 'center',
+  },
+  storyMetricsContainer: {
+    marginTop: 20,
+    padding: 16,
+    backgroundColor: '#1C1C1E',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+  },
+  storyMetricItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  storyMetricItemBordered: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#2C2C2E',
+  },
+  storyMetricLabel: {
+    fontSize: 14,
+    color: '#8E8E93',
+    fontWeight: '500',
+  },
+  storyMetricValue: {
+    fontSize: 16,
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
   footer: {
     alignItems: 'center',

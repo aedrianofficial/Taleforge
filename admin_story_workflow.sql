@@ -139,6 +139,17 @@ WITH CHECK (
   )
 );
 
+CREATE POLICY "Users can delete parts of own stories"
+ON public.story_parts
+FOR DELETE
+USING (
+  EXISTS (
+    SELECT 1 FROM public.stories s
+    WHERE s.id = story_parts.story_id
+    AND s.author_id = auth.uid()
+  )
+);
+
 CREATE POLICY "Admins can manage all story parts"
 ON public.story_parts
 FOR ALL
@@ -233,3 +244,73 @@ SET created_by = stories.author_id
 FROM public.story_parts sp
 JOIN public.stories stories ON stories.id = sp.story_id
 WHERE story_choices.part_id = sp.id;
+
+-- Story reactions policies
+CREATE POLICY "Users can read story reactions"
+ON public.story_reactions
+FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM public.stories s
+    WHERE s.id = story_reactions.story_id
+    AND (s.is_published = true
+         OR s.author_id = auth.uid()
+         OR EXISTS (
+            SELECT 1 FROM public.users
+            WHERE users.id = auth.uid()
+            AND users.is_admin = true
+         )
+    )
+  )
+);
+
+CREATE POLICY "Users can create their own story reactions"
+ON public.story_reactions
+FOR INSERT
+WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Users can update their own story reactions"
+ON public.story_reactions
+FOR UPDATE
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Users can delete their own story reactions"
+ON public.story_reactions
+FOR DELETE
+USING (user_id = auth.uid());
+
+-- Story ratings policies
+CREATE POLICY "Users can read story ratings"
+ON public.story_ratings
+FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM public.stories s
+    WHERE s.id = story_ratings.story_id
+    AND (s.is_published = true
+         OR s.author_id = auth.uid()
+         OR EXISTS (
+            SELECT 1 FROM public.users
+            WHERE users.id = auth.uid()
+            AND users.is_admin = true
+         )
+    )
+  )
+);
+
+CREATE POLICY "Users can create their own story ratings"
+ON public.story_ratings
+FOR INSERT
+WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Users can update their own story ratings"
+ON public.story_ratings
+FOR UPDATE
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Users can delete their own story ratings"
+ON public.story_ratings
+FOR DELETE
+USING (user_id = auth.uid());

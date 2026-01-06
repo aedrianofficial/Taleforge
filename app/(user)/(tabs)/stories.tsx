@@ -9,11 +9,13 @@ import {
     Alert,
     FlatList,
     Modal,
+    Pressable,
+    ScrollView,
     StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
-    View,
+    View
 } from 'react-native';
 
 type StoryTab = 'all' | 'my';
@@ -40,6 +42,16 @@ export default function StoriesScreen() {
   const [editDescription, setEditDescription] = useState('');
   const [editGenre, setEditGenre] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // Reactions and ratings modal state
+  const [reactionsModalVisible, setReactionsModalVisible] = useState(false);
+  const [ratingsModalVisible, setRatingsModalVisible] = useState(false);
+  const [viewingReactionsStory, setViewingReactionsStory] = useState<StoryWithProgress | null>(null);
+  const [viewingRatingsStory, setViewingRatingsStory] = useState<StoryWithProgress | null>(null);
+  const [userReactions, setUserReactions] = useState<any[]>([]);
+  const [userRatings, setUserRatings] = useState<any[]>([]);
+  const [loadingUserDetails, setLoadingUserDetails] = useState(false);
+  const [reactingStories, setReactingStories] = useState<Set<string>>(new Set());
 
   const loadStories = useCallback(async () => {
     if (!user?.id) return;
@@ -102,16 +114,56 @@ export default function StoriesScreen() {
         });
       });
 
+      // Get reactions for stories
+      const { data: reactionsData, error: reactionsError } = await supabase
+        .from('story_reactions')
+        .select('story_id, reaction_type')
+        .in('story_id', allStoryIds);
+
+      if (reactionsError) throw reactionsError;
+
+      // Calculate reaction counts
+      const reactionsMap = new Map<string, { likes: number; dislikes: number }>();
+      reactionsData?.forEach(reaction => {
+        const existing = reactionsMap.get(reaction.story_id) || { likes: 0, dislikes: 0 };
+        if (reaction.reaction_type === 'like') {
+          existing.likes++;
+        } else if (reaction.reaction_type === 'dislike') {
+          existing.dislikes++;
+        }
+        reactionsMap.set(reaction.story_id, existing);
+      });
+
+      // Get user's reactions
+      const { data: userReactions, error: userReactionsError } = await supabase
+        .from('story_reactions')
+        .select('story_id, reaction_type')
+        .eq('user_id', user.id)
+        .in('story_id', allStoryIds);
+
+      if (userReactionsError) throw userReactionsError;
+
+      // Map user reactions
+      const userReactionsMap = new Map<string, 'like' | 'dislike'>();
+      userReactions?.forEach(reaction => {
+        userReactionsMap.set(reaction.story_id, reaction.reaction_type);
+      });
+
       // Helper function to create story with progress
       const createStoryWithProgress = (story: any) => {
         const progress = progressData?.find(p => p.story_id === story.id);
         const ratingInfo = ratingsMap.get(story.id);
+        const reactionInfo = reactionsMap.get(story.id);
+        const userReaction = userReactionsMap.get(story.id);
 
         return {
           ...story,
           author_name: story.users?.name || 'Anonymous',
           average_rating: ratingInfo ? ratingInfo.total / ratingInfo.count : undefined,
           total_ratings: ratingInfo?.count || 0,
+          likes: reactionInfo?.likes || 0,
+          dislikes: reactionInfo?.dislikes || 0,
+          user_reaction: userReaction,
           progress,
         };
       };
@@ -141,6 +193,29 @@ export default function StoriesScreen() {
       loadStories();
     }
   }, [user, loadStories]);
+
+  // Real-time subscription for story reactions and ratings
+  useEffect(() => {
+    const subscription = supabase
+      .channel('user-stories-reactions')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'story_reactions' }, () => {
+        // Reload stories to get updated reaction counts
+        loadStories();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'story_ratings' }, () => {
+        // Reload stories to get updated rating data
+        loadStories();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stories' }, () => {
+        // Reload stories when story data changes (like publishing status)
+        loadStories();
+      })
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [user]);
 
   // Filter and sort stories based on search query, genre, and sort options
   useEffect(() => {
@@ -198,8 +273,8 @@ export default function StoriesScreen() {
             <IconSymbol name="book.fill" size={24} color="#C4A574" />
             <View style={styles.titleContainer}>
               <Text style={styles.storyTitle} numberOfLines={1}>
-                {item.title}
-              </Text>
+              {item.title}
+            </Text>
             {isMyStory && (
               <View style={[
                 styles.statusBadge,
@@ -242,6 +317,47 @@ export default function StoriesScreen() {
                   </Text>
                 </View>
               )}
+              {/* Reactions */}
+              <View style={styles.reactionsContainer}>
+                <TouchableOpacity
+                  style={[
+                    styles.reactionButton,
+                    styles.likeButton,
+                    item.user_reaction === 'like' && styles.reactionButtonActive
+                  ]}
+                  onPress={() => handleReaction(item, 'like')}
+                  disabled={reactingStories.has(item.id)}
+                >
+                  <Text style={{ fontSize: 14, marginRight: 2 }}>
+                    👍
+                  </Text>
+                  <Text style={[
+                    styles.reactionText,
+                    item.user_reaction === 'like' && styles.reactionTextActive
+                  ]}>
+                    {item.likes || 0}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.reactionButton,
+                    styles.dislikeButton,
+                    item.user_reaction === 'dislike' && styles.reactionButtonActive
+                  ]}
+                  onPress={() => handleReaction(item, 'dislike')}
+                  disabled={reactingStories.has(item.id)}
+                >
+                  <Text style={{ fontSize: 14, marginRight: 2 }}>
+                    👎
+                  </Text>
+                  <Text style={[
+                    styles.reactionText,
+                    item.user_reaction === 'dislike' && styles.reactionTextActive
+                  ]}>
+                    {item.dislikes || 0}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             <TouchableOpacity
@@ -253,7 +369,7 @@ export default function StoriesScreen() {
             >
               <Text style={styles.actionButtonText}>
                 {item.progress ? 'Continue' : 'Read'}
-              </Text>
+            </Text>
             </TouchableOpacity>
           </View>
 
@@ -287,7 +403,7 @@ export default function StoriesScreen() {
                 style={[styles.creatorButton, styles.deleteButton]}
                 onPress={() => handleDeleteStory(item)}
               >
-                <IconSymbol name="trash" size={16} color="#FFFFFF" />
+                <Text style={{ fontSize: 14, marginRight: 4 }}>🗑️</Text>
                 <Text style={styles.creatorButtonText}>Delete</Text>
               </TouchableOpacity>
             </View>
@@ -304,6 +420,25 @@ export default function StoriesScreen() {
               </Text>
             </TouchableOpacity>
           )}
+
+          {/* View Reactions and Ratings Links */}
+          {(item.likes || 0) > 0 || (item.dislikes || 0) > 0 ? (
+            <TouchableOpacity
+              style={styles.viewReactionsLink}
+              onPress={() => loadUserDetails(item, 'reactions')}>
+              <Text style={styles.viewReactionsText}>
+                View {(item.likes || 0) + (item.dislikes || 0)} reaction{(item.likes || 0) + (item.dislikes || 0) !== 1 ? 's' : ''}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {(item.total_ratings || 0) > 0 ? (
+            <TouchableOpacity
+              style={styles.viewRatingsLink}
+              onPress={() => loadUserDetails(item, 'ratings')}>
+              <Text style={styles.viewRatingsText}>View all ratings</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </TouchableOpacity>
     );
@@ -487,6 +622,150 @@ export default function StoriesScreen() {
     router.push(`../story-reading/${storyId}?preview=true` as any);
   };
 
+  const handleReaction = async (story: StoryWithProgress, reactionType: 'like' | 'dislike') => {
+    if (!user?.id || reactingStories.has(story.id)) return;
+
+    try {
+      setReactingStories(prev => new Set(prev).add(story.id));
+
+      const currentReaction = story.user_reaction;
+
+      if (currentReaction === reactionType) {
+        // Remove reaction
+        const { error } = await supabase
+          .from('story_reactions')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('story_id', story.id);
+
+        if (error) throw error;
+
+        // Update local state
+        setStories(prev => prev.map(s =>
+          s.id === story.id
+            ? {
+                ...s,
+                likes: reactionType === 'like' ? (s.likes || 0) - 1 : (s.likes || 0),
+                dislikes: reactionType === 'dislike' ? (s.dislikes || 0) - 1 : (s.dislikes || 0),
+                user_reaction: undefined
+              }
+            : s
+        ));
+        setMyStories(prev => prev.map(s =>
+          s.id === story.id
+            ? {
+                ...s,
+                likes: reactionType === 'like' ? (s.likes || 0) - 1 : (s.likes || 0),
+                dislikes: reactionType === 'dislike' ? (s.dislikes || 0) - 1 : (s.dislikes || 0),
+                user_reaction: undefined
+              }
+            : s
+        ));
+      } else {
+        // Delete existing reaction first, then insert new one
+        if (currentReaction) {
+          await supabase
+            .from('story_reactions')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('story_id', story.id);
+        }
+
+        const { error } = await supabase
+          .from('story_reactions')
+          .insert({
+            user_id: user.id,
+            story_id: story.id,
+            reaction_type: reactionType
+          });
+
+        if (error) throw error;
+
+        // Update local state
+        setStories(prev => prev.map(s =>
+          s.id === story.id
+            ? {
+                ...s,
+                likes: reactionType === 'like'
+                  ? (currentReaction === 'dislike' ? (s.likes || 0) + 1 : (s.likes || 0) + (currentReaction ? 0 : 1))
+                  : (currentReaction === 'like' ? (s.likes || 0) - 1 : (s.likes || 0)),
+                dislikes: reactionType === 'dislike'
+                  ? (currentReaction === 'like' ? (s.dislikes || 0) + 1 : (s.dislikes || 0) + (currentReaction ? 0 : 1))
+                  : (currentReaction === 'dislike' ? (s.dislikes || 0) - 1 : (s.dislikes || 0)),
+                user_reaction: reactionType
+              }
+            : s
+        ));
+        setMyStories(prev => prev.map(s =>
+          s.id === story.id
+            ? {
+                ...s,
+                likes: reactionType === 'like'
+                  ? (currentReaction === 'dislike' ? (s.likes || 0) + 1 : (s.likes || 0) + (currentReaction ? 0 : 1))
+                  : (currentReaction === 'like' ? (s.likes || 0) - 1 : (s.likes || 0)),
+                dislikes: reactionType === 'dislike'
+                  ? (currentReaction === 'like' ? (s.dislikes || 0) + 1 : (s.dislikes || 0) + (currentReaction ? 0 : 1))
+                  : (currentReaction === 'dislike' ? (s.dislikes || 0) - 1 : (s.dislikes || 0)),
+                user_reaction: reactionType
+              }
+            : s
+        ));
+      }
+    } catch (error) {
+      console.error('Error handling reaction:', error);
+      Alert.alert('Error', 'Failed to update reaction');
+    } finally {
+      setReactingStories(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(story.id);
+        return newSet;
+      });
+    }
+  };
+
+  const loadUserDetails = async (story: StoryWithProgress, viewType: 'reactions' | 'ratings') => {
+    try {
+      setLoadingUserDetails(true);
+      setViewingReactionsStory(viewType === 'reactions' ? story : null);
+      setViewingRatingsStory(viewType === 'ratings' ? story : null);
+
+      if (viewType === 'reactions') {
+        // Load reactions with user info
+        const { data: reactions, error: reactionsError } = await supabase
+          .from('story_reactions')
+          .select(`
+            reaction_type,
+            created_at,
+            users!user_id(name)
+          `)
+          .eq('story_id', story.id);
+
+        if (reactionsError) throw reactionsError;
+        setUserReactions(reactions || []);
+        setReactionsModalVisible(true);
+      } else if (viewType === 'ratings') {
+        // Load ratings with user info
+        const { data: ratings, error: ratingsError } = await supabase
+          .from('story_ratings')
+          .select(`
+            rating,
+            created_at,
+            users!user_id(name)
+          `)
+          .eq('story_id', story.id);
+
+        if (ratingsError) throw ratingsError;
+        setUserRatings(ratings || []);
+        setRatingsModalVisible(true);
+      }
+    } catch (error) {
+      console.error('Error loading user details:', error);
+      Alert.alert('Error', 'Failed to load user details');
+    } finally {
+      setLoadingUserDetails(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.centerContainer}>
@@ -558,7 +837,7 @@ export default function StoriesScreen() {
             style={styles.filterButton}
             onPress={() => setShowFilters(true)}
           >
-            <IconSymbol name="line.3.horizontal.decrease.circle" size={20} color="#C4A574" />
+            <Text style={{ fontSize: 16 }}>⚙️</Text>
             <Text style={styles.filterButtonText}>
               {selectedGenre === 'all' ? 'All Genres' : selectedGenre}
             </Text>
@@ -673,48 +952,78 @@ export default function StoriesScreen() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Edit Story</Text>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Title *</Text>
-              <TextInput
-                style={styles.modalTextInput}
-                value={editTitle}
-                onChangeText={setEditTitle}
-                placeholder="Enter story title..."
-                placeholderTextColor="#8E8E93"
-              />
+            <View style={styles.modalHeader}>
+              <IconSymbol name="pencil" size={24} color="#C4A574" />
+              <Text style={styles.modalTitle}>Edit Story</Text>
+              <TouchableOpacity
+                onPress={() => setEditModalVisible(false)}
+                style={styles.closeButton}
+              >
+                <IconSymbol name="xmark" size={20} color="#8E8E93" />
+              </TouchableOpacity>
             </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Description</Text>
-              <TextInput
-                style={[styles.modalTextInput, { height: 80, textAlignVertical: 'top' }]}
-                value={editDescription}
-                onChangeText={setEditDescription}
-                placeholder="Enter story description..."
-                placeholderTextColor="#8E8E93"
-                multiline={true}
-                numberOfLines={3}
-              />
-            </View>
+            <ScrollView showsVerticalScrollIndicator={false} style={styles.modalScroll}>
+              <View style={styles.inputGroup}>
+                <View style={styles.inputHeader}>
+                  <Text style={{ fontSize: 16, marginRight: 8 }}>✏️</Text>
+                  <Text style={styles.inputLabel}>Title *</Text>
+                </View>
+                <TextInput
+                  style={[styles.modalTextInput, styles.titleInput]}
+                  value={editTitle}
+                  onChangeText={setEditTitle}
+                  placeholder="Enter an engaging story title..."
+                  placeholderTextColor="#8E8E93"
+                  maxLength={100}
+                />
+                <Text style={styles.charCount}>{editTitle.length}/100</Text>
+              </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Genre</Text>
-              <TextInput
-                style={styles.modalTextInput}
-                value={editGenre}
-                onChangeText={setEditGenre}
-                placeholder="Fantasy, Mystery, Adventure..."
-                placeholderTextColor="#8E8E93"
-              />
-            </View>
+              <View style={styles.inputGroup}>
+                <View style={styles.inputHeader}>
+                  <Text style={{ fontSize: 16, marginRight: 8 }}>💬</Text>
+                  <Text style={styles.inputLabel}>Description</Text>
+                </View>
+                <TextInput
+                  style={[styles.modalTextInput, styles.descriptionInput]}
+                  value={editDescription}
+                  onChangeText={setEditDescription}
+                  placeholder="Describe your story's premise, setting, and main character..."
+                  placeholderTextColor="#8E8E93"
+                  multiline={true}
+                  numberOfLines={4}
+                  textAlignVertical="top"
+                  maxLength={500}
+                />
+                <Text style={styles.charCount}>{editDescription.length}/500</Text>
+              </View>
 
-            <View style={styles.modalButtons}>
+              <View style={styles.inputGroup}>
+                <View style={styles.inputHeader}>
+                  <Text style={{ fontSize: 16, marginRight: 8 }}>🏷️</Text>
+                  <Text style={styles.inputLabel}>Genre</Text>
+                </View>
+                <TextInput
+                  style={[styles.modalTextInput, styles.genreInput]}
+                  value={editGenre}
+                  onChangeText={setEditGenre}
+                  placeholder="e.g., Fantasy, Mystery, Romance, Sci-Fi..."
+                  placeholderTextColor="#8E8E93"
+                  maxLength={50}
+                />
+                <Text style={styles.genreHint}>
+                  Choose a genre that best describes your story
+                </Text>
+              </View>
+            </ScrollView>
+
+            <View style={styles.modalFooter}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
                 onPress={() => setEditModalVisible(false)}
               >
+                <IconSymbol name="xmark" size={16} color="#8E8E93" />
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -725,7 +1034,10 @@ export default function StoriesScreen() {
                 {savingEdit ? (
                   <ActivityIndicator size="small" color="#FFFFFF" />
                 ) : (
-                  <Text style={styles.saveButtonText}>Save Changes</Text>
+                  <>
+                    <IconSymbol name="checkmark" size={16} color="#FFFFFF" />
+                    <Text style={styles.saveButtonText}>Save Changes</Text>
+                  </>
                 )}
               </TouchableOpacity>
             </View>
@@ -783,6 +1095,94 @@ export default function StoriesScreen() {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* Reactions List Modal */}
+      <Modal visible={reactionsModalVisible} transparent animationType="fade">
+        <Pressable style={styles.modalOverlay} onPress={() => setReactionsModalVisible(false)}>
+          <Pressable style={styles.listModalContent} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>Reactions</Text>
+            <ScrollView style={styles.reactionsList}>
+              {loadingUserDetails ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="small" color="#C4A574" />
+                  <Text style={styles.loadingText}>Loading reactions...</Text>
+                </View>
+              ) : (
+                <View style={styles.reactionSummary}>
+                  {userReactions.length === 0 ? (
+                    <Text style={styles.noDataText}>No reactions yet</Text>
+                  ) : (
+                    userReactions.map((reaction, index) => (
+                      <View key={index} style={styles.summaryItem}>
+                        <Text style={styles.summaryEmoji}>
+                          {reaction.reaction_type === 'like' ? '👍' : '👎'}
+                        </Text>
+                        <View style={styles.userInfo}>
+                          <Text style={styles.summaryText}>{reaction.users?.name || 'Anonymous'}</Text>
+                          <Text style={styles.timestampText}>
+                            {new Date(reaction.created_at).toLocaleDateString()}
+                          </Text>
+                        </View>
+                      </View>
+                    ))
+                  )}
+                </View>
+              )}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setReactionsModalVisible(false)}>
+              <Text style={styles.closeButtonText}>Close</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Ratings List Modal */}
+      <Modal visible={ratingsModalVisible} transparent animationType="fade">
+        <Pressable style={styles.modalOverlay} onPress={() => setRatingsModalVisible(false)}>
+          <Pressable style={styles.listModalContent} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>Ratings</Text>
+            <ScrollView style={styles.reactionsList}>
+              {loadingUserDetails ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="small" color="#C4A574" />
+                  <Text style={styles.loadingText}>Loading ratings...</Text>
+                </View>
+              ) : (
+                <View style={styles.ratingSummary}>
+                  {userRatings.length === 0 ? (
+                    <Text style={styles.noDataText}>No ratings yet</Text>
+                  ) : (
+                    userRatings.map((rating, index) => (
+                      <View key={index} style={styles.summaryItem}>
+                        <View style={styles.starsContainer}>
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <Text key={star} style={[styles.starIcon, star <= rating.rating && styles.starFilled]}>
+                              ★
+                            </Text>
+                          ))}
+                        </View>
+                        <View style={styles.userInfo}>
+                          <Text style={styles.summaryText}>{rating.users?.name || 'Anonymous'}</Text>
+                          <Text style={styles.timestampText}>
+                            {new Date(rating.created_at).toLocaleDateString()}
+                          </Text>
+                        </View>
+                      </View>
+                    ))
+                  )}
+                </View>
+              )}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setRatingsModalVisible(false)}>
+              <Text style={styles.closeButtonText}>Close</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
       </Modal>
     </View>
   );
@@ -1028,7 +1428,7 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
@@ -1037,16 +1437,33 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: '#1C1C1E',
-    borderRadius: 12,
+    borderRadius: 16,
+    padding: 0,
+    width: '95%',
+    maxWidth: 420,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     padding: 20,
-    width: '90%',
-    maxWidth: 400,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#2C2C2E',
+  },
+  closeButton: {
+    padding: 4,
   },
   modalTitle: {
     fontSize: 20,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#E8D5B7',
-    marginBottom: 8,
+    flex: 1,
+    textAlign: 'center',
+    marginHorizontal: 12,
+  },
+  modalScroll: {
+    padding: 20,
   },
   modalSubtitle: {
     fontSize: 16,
@@ -1055,12 +1472,62 @@ const styles = StyleSheet.create({
   },
   modalTextInput: {
     backgroundColor: '#2C2C2E',
-    borderRadius: 8,
-    padding: 12,
-    color: '#FFFFFF',
+    borderRadius: 10,
+    padding: 16,
+    color: '#E8D5B7',
     fontSize: 16,
-    minHeight: 120,
-    marginBottom: 20,
+    minHeight: 50,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#3A3A3C',
+  },
+  inputLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#E8D5B7',
+    marginBottom: 8,
+  },
+  saveButtonText: {
+    color: '#E8D5B7',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  inputHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
+  },
+  titleInput: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  descriptionInput: {
+    minHeight: 100,
+    paddingTop: 12,
+  },
+  genreInput: {
+    fontSize: 16,
+  },
+  charCount: {
+    fontSize: 12,
+    color: '#8E8E93',
+    textAlign: 'right',
+    marginTop: 4,
+  },
+  genreHint: {
+    fontSize: 12,
+    color: '#8E8E93',
+    fontStyle: 'italic',
+    marginTop: 4,
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 20,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#2C2C2E',
   },
   modalButtons: {
     flexDirection: 'row',
@@ -1129,6 +1596,125 @@ const styles = StyleSheet.create({
   starsContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  reactionsContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  reactionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+    backgroundColor: '#2C2C2E',
+    gap: 4,
+  },
+  likeButton: {
+    borderColor: '#4CAF50',
+  },
+  dislikeButton: {
+    borderColor: '#F44336',
+  },
+  reactionButtonActive: {
+    backgroundColor: '#C4A574',
+    borderColor: '#C4A574',
+  },
+  reactionText: {
+    fontSize: 12,
+    color: '#8E8E93',
+    fontWeight: '500',
+  },
+  reactionTextActive: {
+    color: '#FFFFFF',
+  },
+  viewReactionsLink: {
+    marginTop: 8,
+    paddingVertical: 4,
+  },
+  viewReactionsText: {
+    fontSize: 13,
+    color: '#C4A574',
+    textAlign: 'center',
+  },
+  viewRatingsLink: {
+    marginTop: 4,
+    paddingVertical: 4,
+  },
+  viewRatingsText: {
+    fontSize: 13,
+    color: '#C4A574',
+    textAlign: 'center',
+  },
+  listModalContent: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 20,
+    padding: 20,
+    width: '100%',
+    maxWidth: 350,
+    maxHeight: '70%',
+  },
+  reactionsList: {
+    maxHeight: 300,
+  },
+  reactionSummary: {
+    padding: 10,
+  },
+  ratingSummary: {
+    padding: 10,
+  },
+  summaryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#2C2C2E',
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  summaryEmoji: {
+    fontSize: 20,
+    marginRight: 12,
+  },
+  summaryText: {
+    fontSize: 16,
+    color: '#FFFFFF',
+    flex: 1,
+  },
+  closeButtonText: {
+    fontSize: 16,
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  userInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  timestampText: {
+    fontSize: 12,
+    color: '#8E8E93',
+    marginTop: 2,
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    padding: 20,
+  },
+  noDataText: {
+    fontSize: 16,
+    color: '#8E8E93',
+    textAlign: 'center',
+    padding: 20,
+  },
+  starIcon: {
+    fontSize: 16,
+    color: '#8E8E93',
+    marginRight: 2,
+  },
+  starFilled: {
+    color: '#FFD700',
   },
 
   // Filter styles
