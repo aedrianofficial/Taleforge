@@ -4,17 +4,17 @@ import { useAuth } from '@/src/context/AuthContext';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    Modal,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 
 interface Story {
@@ -1290,6 +1290,12 @@ export default function StoryReviewScreen() {
           >
             <Text style={styles.actionButtonText}>Reject</Text>
           </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.responsesButton]}
+            onPress={() => router.push(`../story-responses/${storyId}` as any)}
+          >
+            <Text style={styles.actionButtonText}>Show All User Responses</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Load Parts Button */}
@@ -2037,6 +2043,9 @@ const styles = StyleSheet.create({
   },
   rejectButton: {
     backgroundColor: '#F44336',
+  },
+  responsesButton: {
+    backgroundColor: '#9C27B0', // Purple color
   },
   actionButtonText: {
     color: '#FFFFFF',

@@ -1,23 +1,24 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { supabase } from '@/src/config/supabase';
 import { useAuth } from '@/src/context/AuthContext';
-import { StoryWithProgress } from '@/src/types/stories';
+import { StoryPathEntry, StoryWithProgress } from '@/src/types/stories';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    LayoutAnimation,
+    Modal,
+    Platform,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -41,10 +42,11 @@ interface StoryChoice {
 }
 
 export default function StoryDetailScreen() {
-  const { storyId } = useLocalSearchParams<{ storyId: string }>();
+  const { storyId, completed, path } = useLocalSearchParams<{ storyId: string; completed?: string; path?: string }>();
   const { user } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const isCompletedView = completed === 'true';
 
   const [story, setStory] = useState<StoryWithProgress | null>(null);
   const [loading, setLoading] = useState(true);
@@ -77,11 +79,79 @@ export default function StoryDetailScreen() {
   const [expandedParts, setExpandedParts] = useState<Set<string>>(new Set());
   const [expandedChoices, setExpandedChoices] = useState<Set<string>>(new Set());
 
+  // Completed story view state
+  const [completedStoryPath, setCompletedStoryPath] = useState<StoryPathEntry[]>([]);
+  const [reflectionResponse, setReflectionResponse] = useState<string>('');
+  const [fullStoryContent, setFullStoryContent] = useState<{[key: string]: string}>({});
+  const [showFullStory, setShowFullStory] = useState<boolean>(false);
+  const [loadingFullContent, setLoadingFullContent] = useState<boolean>(false);
+
   useEffect(() => {
     if (storyId && user) {
       loadStoryDetails();
     }
   }, [storyId, user]);
+
+  // Load completed story data when in completed view - always load from database for consistency
+  useEffect(() => {
+    if (isCompletedView && user?.id) {
+      loadCompletedStoryData();
+    }
+  }, [isCompletedView, user?.id]);
+
+  const loadCompletedStoryData = async () => {
+    if (!storyId || !user?.id) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('user_story_paths')
+        .select('comprehension_response, story_path')
+        .eq('user_id', user.id)
+        .eq('story_id', storyId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        throw error;
+      }
+
+      if (data?.comprehension_response) {
+        setReflectionResponse(data.comprehension_response);
+      }
+
+      if (data?.story_path) {
+        setCompletedStoryPath(data.story_path);
+      }
+    } catch (error) {
+      console.error('Error loading completed story data:', error);
+    }
+  };
+
+  const loadFullStoryContent = async () => {
+    if (completedStoryPath.length === 0) return;
+
+    try {
+      setLoadingFullContent(true);
+      const partIds = completedStoryPath.map(entry => entry.part_id);
+
+      const { data: parts, error } = await supabase
+        .from('story_parts')
+        .select('id, content')
+        .in('id', partIds);
+
+      if (error) throw error;
+
+      const contentMap: {[key: string]: string} = {};
+      parts?.forEach(part => {
+        contentMap[part.id] = part.content;
+      });
+
+      setFullStoryContent(contentMap);
+    } catch (error) {
+      console.error('Error loading full story content:', error);
+    } finally {
+      setLoadingFullContent(false);
+    }
+  };
 
   const loadStoryDetails = useCallback(async () => {
     if (!storyId || !user?.id) return;
@@ -260,6 +330,11 @@ export default function StoryDetailScreen() {
       console.error('Error resetting story progress:', error);
       Alert.alert('Error', 'Failed to restart story');
     }
+  };
+
+  const handleRereadExactExperience = () => {
+    // Navigate to story-reading with the exact path from completed story
+    router.push(`../story-reading/${storyId}?path=${encodeURIComponent(JSON.stringify(completedStoryPath))}` as any);
   };
 
   const handleSubmitForReview = async () => {
@@ -873,6 +948,106 @@ export default function StoryDetailScreen() {
           </View>
         )}
 
+        {/* Completed Story Reflection Section */}
+        {isCompletedView && reflectionResponse && (
+          <View style={styles.reflectionSection}>
+            <Text style={styles.sectionTitle}>Your Reflection</Text>
+            <Text style={styles.reflectionText}>{reflectionResponse}</Text>
+          </View>
+        )}
+
+        {/* Completed Story Path Section */}
+        {isCompletedView && completedStoryPath.length > 0 && (
+          <View style={styles.completedPathSection}>
+            <Text style={styles.sectionTitle}>Your Story Journey</Text>
+            <Text style={styles.completedPathSubtitle}>
+              Here are the choices you made during your reading experience:
+            </Text>
+
+            {/* Toggle Button */}
+            <TouchableOpacity
+              style={styles.toggleButton}
+              onPress={() => {
+                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                if (!showFullStory && Object.keys(fullStoryContent).length === 0) {
+                  loadFullStoryContent();
+                }
+                setShowFullStory(!showFullStory);
+              }}
+              disabled={loadingFullContent}
+            >
+              {loadingFullContent ? (
+                <ActivityIndicator size="small" color="#C4A574" />
+              ) : (
+                <>
+                  <Text style={styles.toggleButtonText}>
+                    {showFullStory ? 'Hide' : 'View More'}
+                  </Text>
+                  <IconSymbol
+                    name={showFullStory ? "chevron.up" : "chevron.down"}
+                    size={16}
+                    color="#C4A574"
+                  />
+                </>
+              )}
+            </TouchableOpacity>
+
+            {/* Story Content Display */}
+            <View style={showFullStory ? styles.expandedContentWrapper : styles.collapsedContentWrapper}>
+              {showFullStory ? (
+                /* Full Story Display */
+                <ScrollView
+                  style={styles.storyScrollView}
+                  contentContainerStyle={styles.scrollContentContainer}
+                  showsVerticalScrollIndicator={true}
+                  bounces={false}
+                  scrollEventThrottle={16}
+                  indicatorStyle="white"
+                  scrollEnabled={true}
+                  nestedScrollEnabled={true}
+                >
+                  {completedStoryPath.map((entry, index) => {
+                    const fullContent = fullStoryContent[entry.part_id];
+                    return (
+                      <View key={`${entry.part_id}-${index}`} style={styles.fullStoryPart}>
+                        <View style={styles.fullStoryHeader}>
+                          <Text style={styles.partNumberFull}>Part {index + 1}</Text>
+                          {entry.choice_text && (
+                            <View style={styles.choiceIndicator}>
+                              <IconSymbol name="arrow.right" size={14} color="#C4A574" />
+                              <Text style={styles.choiceTextFull}>{entry.choice_text}</Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text style={styles.fullStoryText}>
+                          {fullContent || entry.part_content || 'Content not available'}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              ) : (
+                /* Summary Display */
+                completedStoryPath.map((entry, index) => (
+                  <View key={`${entry.part_id}-${index}`} style={styles.choiceEntry}>
+                    <View style={styles.choiceHeader}>
+                      <Text style={styles.partNumber}>Part {index + 1}</Text>
+                      {entry.choice_text && (
+                        <Text style={styles.choiceTextCompleted}>&ldquo;{entry.choice_text}&rdquo;</Text>
+                      )}
+                    </View>
+                    {entry.part_content && (
+                      <Text style={styles.partPreview} numberOfLines={2}>
+                        {entry.part_content.substring(0, 100)}...
+                      </Text>
+                    )}
+                  </View>
+                ))
+              )}
+            </View>
+          </View>
+        )}
+
         {/* Progress Section */}
         {story.progress && (
           <View style={styles.progressSection}>
@@ -888,7 +1063,26 @@ export default function StoryDetailScreen() {
 
         {/* Action Buttons */}
         <View style={styles.actionContainer}>
-          {story.author_id === user?.id ? (
+          {isCompletedView ? (
+            // Completed story view - show reread and new session options
+            <View style={styles.completedActions}>
+              <TouchableOpacity
+                style={[styles.actionButton, styles.rereadButton]}
+                onPress={handleRereadExactExperience}
+              >
+                <IconSymbol name="book" size={20} color="#FFFFFF" />
+                <Text style={styles.actionButtonText}>Read Again (Same Choices)</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionButton, styles.newSessionButton]}
+                onPress={handleReadAgain}
+              >
+                <IconSymbol name="arrow.clockwise" size={20} color="#FFFFFF" />
+                <Text style={styles.actionButtonText}>Start New Session</Text>
+              </TouchableOpacity>
+            </View>
+          ) : story.author_id === user?.id ? (
             // Creator view - show edit and publish options
             <View style={styles.creatorActions}>
               <TouchableOpacity
@@ -1646,6 +1840,185 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  reflectionSection: {
+    backgroundColor: '#2C2C2E',
+    borderRadius: 16,
+    padding: 24,
+    marginBottom: 20,
+  },
+  reflectionText: {
+    fontSize: 16,
+    color: '#E8D5B7',
+    lineHeight: 24,
+    fontStyle: 'italic',
+  },
+  completedPathSection: {
+    backgroundColor: '#2C2C2E',
+    borderRadius: 16,
+    padding: 24,
+    marginBottom: 20,
+  },
+  completedPathSubtitle: {
+    fontSize: 16,
+    color: '#8E8E93',
+    marginBottom: 20,
+    lineHeight: 24,
+  },
+  completedPathList: {
+    gap: 12,
+  },
+  completedPathEntry: {
+    backgroundColor: '#3A3A3C',
+    borderRadius: 8,
+    padding: 16,
+  },
+  completedPathHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  completedPartNumber: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#C4A574',
+    backgroundColor: '#2C2C2E',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginRight: 12,
+  },
+  completedChoiceText: {
+    fontSize: 16,
+    color: '#E8D5B7',
+    fontStyle: 'italic',
+    flex: 1,
+  },
+  completedPartPreview: {
+    fontSize: 14,
+    color: '#8E8E93',
+    lineHeight: 20,
+  },
+  toggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    backgroundColor: '#3A3A3C',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    marginBottom: 20,
+    gap: 8,
+    minHeight: 44, // Ensure touchable area
+  },
+  toggleButtonText: {
+    color: '#C4A574',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  collapsedContentWrapper: {
+    // Content flows naturally in main ScrollView
+  },
+  expandedContentWrapper: {
+    height: 400, // Fixed height container for expanded content
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  storyScrollView: {
+    height: '100%', // Fill the expanded container
+  },
+  scrollContentContainer: {
+    paddingHorizontal: 4,
+    paddingVertical: 8,
+    paddingBottom: 20, // Extra padding at bottom for better UX
+  },
+  fullStoryPart: {
+    marginBottom: 24,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#3A3A3C',
+  },
+  fullStoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    flexWrap: 'wrap',
+  },
+  partNumberFull: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#C4A574',
+    backgroundColor: '#1C1C1E',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginRight: 12,
+    marginBottom: 4,
+  },
+  choiceIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#3A3A3C',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginBottom: 4,
+    gap: 6,
+    flex: 1,
+  },
+  choiceTextFull: {
+    fontSize: 14,
+    color: '#E8D5B7',
+    fontStyle: 'italic',
+    flex: 1,
+  },
+  fullStoryText: {
+    fontSize: 16,
+    color: '#E8D5B7',
+    lineHeight: 24,
+    textAlign: 'left',
+  },
+  choiceEntry: {
+    backgroundColor: '#3A3A3C',
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 12,
+  },
+  choiceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  partNumber: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#C4A574',
+    backgroundColor: '#2C2C2E',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginRight: 12,
+  },
+  choiceTextCompleted: {
+    fontSize: 16,
+    color: '#E8D5B7',
+    fontStyle: 'italic',
+    flex: 1,
+  },
+  partPreview: {
+    fontSize: 14,
+    color: '#8E8E93',
+    lineHeight: 20,
+  },
+  completedActions: {
+    gap: 12,
+  },
+  rereadButton: {
+    backgroundColor: '#2196F3',
+  },
+  newSessionButton: {
+    backgroundColor: '#4CAF50',
   },
   modalOverlay: {
     flex: 1,

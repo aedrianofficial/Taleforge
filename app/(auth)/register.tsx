@@ -2,14 +2,14 @@ import { useAuth } from '@/src/context/AuthContext';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
 import {
-    ActivityIndicator,
-    KeyboardAvoidingView,
-    Platform,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
 export default function RegisterScreen() {
@@ -72,10 +72,10 @@ export default function RegisterScreen() {
           <Text style={styles.successIcon}>✓</Text>
           <Text style={styles.title}>Account Created!</Text>
           <Text style={styles.successText}>
-            Your account has been created successfully. Please confirm your email to sign in.
+            Your account has been created successfully! Please check your email to confirm your account and start your storytelling journey.
           </Text>
           <Text style={styles.hintText}>
-            Check your inbox for {email} or find the confirmation link in your Supabase dashboard under Authentication → Users.
+            Look for an email from Taleforge at {email}. If you don't see it, check your spam folder or find the confirmation link in your Supabase dashboard under Authentication → Users.
           </Text>
           <TouchableOpacity
             style={styles.primaryButton}

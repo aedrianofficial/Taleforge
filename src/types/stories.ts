@@ -61,6 +61,24 @@ export interface StoryReaction {
   created_at: string;
 }
 
+export interface UserStoryPath {
+  id: string;
+  user_id: string;
+  story_id: string;
+  story_path: StoryPathEntry[];
+  comprehension_response?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StoryPathEntry {
+  part_id: string;
+  choice_id?: string;
+  choice_text?: string;
+  timestamp: string;
+  part_content?: string; // For summary display
+}
+
 // Combined types for UI components
 export interface StoryWithProgress extends Story {
   progress?: StoryProgress;

@@ -6,6 +6,7 @@ import {
     Story,
     StoryChoice,
     StoryPartWithChoices,
+    StoryPathEntry,
     StoryProgress
 } from '@/src/types/stories';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -23,21 +24,35 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function StoryReadingScreen() {
-  const { storyId, preview } = useLocalSearchParams<{ storyId: string; preview?: string }>();
+  const { storyId, preview, path } = useLocalSearchParams<{ storyId: string; preview?: string; path?: string }>();
   const { user } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const isPreview = preview === 'true';
+  const isReplayMode = !!path;
 
   const [readingState, setReadingState] = useState<ReadingState | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [storyPath, setStoryPath] = useState<StoryPathEntry[]>([]);
 
   useEffect(() => {
     if (storyId && user) {
       initializeReading();
     }
   }, [storyId, user]);
+
+  // Parse replay path when available
+  useEffect(() => {
+    if (path && isReplayMode) {
+      try {
+        const parsedPath = JSON.parse(decodeURIComponent(path));
+        setStoryPath(parsedPath);
+      } catch (error) {
+        console.error('Error parsing replay path:', error);
+      }
+    }
+  }, [path, isReplayMode]);
 
   const initializeReading = useCallback(async () => {
     if (!storyId || !user?.id) return;
@@ -204,6 +219,33 @@ export default function StoryReadingScreen() {
         progress,
       });
 
+      // Record the initial part in the story path if this is the first part
+      if (storyPath.length === 0) {
+        setStoryPath([{
+          part_id: partId,
+          timestamp: new Date().toISOString(),
+          part_content: part.content
+        }]);
+      }
+
+      // In replay mode, automatically proceed with the recorded choice
+      if (isReplayMode && !partWithChoices.is_ending && partWithChoices.choices.length > 0) {
+        // Find the recorded choice for this part
+        const recordedChoice = storyPath.find(entry =>
+          entry.part_id === partId && entry.choice_id
+        );
+
+        if (recordedChoice) {
+          const choice = partWithChoices.choices.find(c => c.id === recordedChoice.choice_id);
+          if (choice) {
+            // Auto-proceed with the recorded choice after a short delay
+            setTimeout(() => {
+              handleChoice(choice);
+            }, 1500); // 1.5 second delay to let user see the content
+          }
+        }
+      }
+
       // Ending parts are now handled in the UI with the Finish button
       // No automatic alerts or navigation for ending parts
     } catch (error) {
@@ -235,8 +277,15 @@ export default function StoryReadingScreen() {
           if (completeError) throw completeError;
         }
 
-        // Navigate to ending screen for rating
-        router.push(`../story-ending/${storyId}` as any);
+        // Navigate to ending screen for rating, passing the story path
+        const pathParam = encodeURIComponent(JSON.stringify([...storyPath, {
+          part_id: readingState.currentPart.id,
+          choice_id: choice.id,
+          choice_text: choice.choice_text,
+          timestamp: new Date().toISOString(),
+          part_content: readingState.currentPart.content
+        }]));
+        router.push(`../story-ending/${storyId}?path=${pathParam}` as any);
         return;
       }
 
@@ -252,6 +301,14 @@ export default function StoryReadingScreen() {
 
         if (updateError) throw updateError;
       }
+
+      // Record the choice in the story path
+      setStoryPath(prev => [...prev, {
+        part_id: nextPartId,
+        choice_id: choice.id,
+        choice_text: choice.choice_text,
+        timestamp: new Date().toISOString()
+      }]);
 
       // Load next part
       await loadStoryPart(nextPartId, readingState.story, {
@@ -299,8 +356,13 @@ export default function StoryReadingScreen() {
           throw completeError;
         }
 
-        // Navigate to ending screen for rating
-        router.push(`../story-ending/${storyId}` as any);
+        // Navigate to ending screen for rating, passing the story path
+        const pathParam = encodeURIComponent(JSON.stringify([...storyPath, {
+          part_id: readingState.currentPart.id,
+          timestamp: new Date().toISOString(),
+          part_content: readingState.currentPart.content
+        }]));
+        router.push(`../story-ending/${storyId}?path=${pathParam}` as any);
       } else {
         // Preview mode: Go back to story detail page for editing
         router.replace(`../story-detail/${storyId}` as any);
@@ -380,18 +442,39 @@ export default function StoryReadingScreen() {
       {/* Choices or Finish Button */}
       {!currentPart.is_ending && currentPart.choices.length > 0 && (
         <View style={styles.choicesContainer}>
-          <Text style={styles.choicesTitle}>What happens next?</Text>
-          {currentPart.choices.map((choice) => (
-            <TouchableOpacity
-              key={choice.id}
-              style={styles.choiceButton}
-              onPress={() => handleChoice(choice)}
-              disabled={saving}
-            >
-              <Text style={styles.choiceText}>{choice.choice_text}</Text>
-              <IconSymbol name="chevron.right" size={16} color="#C4A574" />
-            </TouchableOpacity>
-          ))}
+          <Text style={styles.choicesTitle}>
+            {isReplayMode ? 'Replaying your choices...' : 'What happens next?'}
+          </Text>
+          {currentPart.choices.map((choice) => {
+            // In replay mode, highlight the choice that was made
+            const isSelectedChoice = isReplayMode && storyPath.some(entry =>
+              entry.part_id === currentPart.id && entry.choice_id === choice.id
+            );
+
+            return (
+              <TouchableOpacity
+                key={choice.id}
+                style={[
+                  styles.choiceButton,
+                  isSelectedChoice && styles.selectedChoiceButton
+                ]}
+                onPress={() => !isReplayMode && handleChoice(choice)}
+                disabled={saving || isReplayMode}
+              >
+                <Text style={[
+                  styles.choiceText,
+                  isSelectedChoice && styles.selectedChoiceText
+                ]}>
+                  {choice.choice_text}
+                </Text>
+                <IconSymbol
+                  name="chevron.right"
+                  size={16}
+                  color={isSelectedChoice ? "#4CAF50" : "#C4A574"}
+                />
+              </TouchableOpacity>
+            );
+          })}
         </View>
       )}
 
@@ -561,6 +644,15 @@ const styles = StyleSheet.create({
     color: '#E8D5B7',
     flex: 1,
     marginRight: 12,
+  },
+  selectedChoiceButton: {
+    backgroundColor: '#1B5E20',
+    borderWidth: 2,
+    borderColor: '#4CAF50',
+  },
+  selectedChoiceText: {
+    color: '#81C784',
+    fontWeight: '600',
   },
   finishContainer: {
     backgroundColor: '#2C2C2E',
